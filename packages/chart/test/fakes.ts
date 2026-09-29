@@ -22,7 +22,17 @@ export class RecordingContext {
   readonly rects: { x: number; y: number; w: number; h: number; style: string }[] = [];
   readonly texts: { text: string; x: number; y: number; style: string; align: CanvasTextAlign }[] =
     [];
+  clears = 0;
   setTransform(): void {}
+  clearRect(): void {
+    this.clears++;
+  }
+  /** Forget recorded calls (e.g. between two renders). */
+  reset(): void {
+    this.rects.length = 0;
+    this.texts.length = 0;
+    this.clears = 0;
+  }
   save(): void {}
   restore(): void {}
   beginPath(): void {}
@@ -39,30 +49,73 @@ export class RecordingContext {
   }
 }
 
+type Listener = (event: unknown) => void;
+
 export interface FakeCanvas {
   width: number;
   height: number;
   style: Record<string, string>;
   removed: boolean;
   ctx: RecordingContext;
+  listeners: Map<string, Set<Listener>>;
+  captured: Set<number>;
   getContext(): RecordingContext;
   remove(): void;
+  addEventListener(type: string, listener: Listener): void;
+  removeEventListener(type: string, listener: Listener): void;
+  setPointerCapture(id: number): void;
+  releasePointerCapture(id: number): void;
+  hasPointerCapture(id: number): boolean;
+  /** Total registered listeners across all event types. */
+  listenerCount(): number;
+  /** Dispatches a fake event to the registered listeners; returns whether preventDefault ran. */
+  dispatch(type: string, event: Record<string, unknown>): boolean;
 }
 
 export function fakeCanvas(): FakeCanvas {
   const ctx = new RecordingContext();
+  const listeners = new Map<string, Set<Listener>>();
+  const captured = new Set<number>();
   return {
     width: 0,
     height: 0,
     style: {},
     removed: false,
     ctx,
+    listeners,
+    captured,
     getContext: () => ctx,
     remove() {
       this.removed = true;
     },
+    addEventListener(type, listener) {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(listener);
+    },
+    removeEventListener(type, listener) {
+      listeners.get(type)?.delete(listener);
+    },
+    setPointerCapture: (id) => void captured.add(id),
+    releasePointerCapture: (id) => void captured.delete(id),
+    hasPointerCapture: (id) => captured.has(id),
+    listenerCount: () => [...listeners.values()].reduce((n, set) => n + set.size, 0),
+    dispatch(type, event) {
+      let prevented = false;
+      const e = { ...event, preventDefault: () => (prevented = true) };
+      for (const listener of listeners.get(type) ?? []) listener(e);
+      return prevented;
+    },
   };
 }
+
+/** Pointer event fields the chart reads. */
+export const pointer = (x: number, y: number, extra: Record<string, unknown> = {}) => ({
+  offsetX: x,
+  offsetY: y,
+  pointerId: 1,
+  button: 0,
+  ...extra,
+});
 
 /** Fake browser: manual animation frames, manual resize, disposers that are tracked. */
 export class FakeEnvironment implements ChartEnvironment {

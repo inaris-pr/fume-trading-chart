@@ -16,7 +16,7 @@ A **canonical candle** is defined only by the instrument's session windows, the 
 
 Equities RTH is one window, 09:30–16:00 ET, with early closes applied by the calendar. Futures supply their own windows, which may cross midnight and have breaks.
 
-**2. Intraday buckets** (`1m`, `5m`, `15m`, `1h`, duration `D`). For the selected window `W` containing `t`:
+**2. Intraday buckets** (`1m`, `5m`, `15m`, `1h`, `4h`, duration `D`). For the selected window `W` containing `t`:
 
 ```
 start = W.start + floor((t − W.start) / D) · D
@@ -42,6 +42,8 @@ The arithmetic is on absolute UTC milliseconds, within a window that was already
 | 15:30–16:00 (short) |                     |
 
 For `5m` and `15m`, anchoring at 09:30 gives the same boundaries as clock alignment, because 09:30 is a multiple of both.
+
+**US equities, regular mode, 4h** (added in Stage 2): 09:30–13:30, then a short 13:30–16:00. A futures instrument gets its own 4h buckets from its own session windows by the same rule.
 
 Candle fields: `open` = first, `close` = last, `high`/`low` = max/min, `volume` = Σ. `tradeCount` = Σ only if every input has it. `vwap` = Σ(vwap·volume)/Σvolume only if every input has it, otherwise omitted. There are **no synthetic bars**: a bucket with no input has no candle, and it shows as an empty slot on the time axis.
 

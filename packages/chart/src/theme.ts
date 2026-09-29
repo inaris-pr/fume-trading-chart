@@ -9,6 +9,9 @@ export interface ChartTheme {
   flatColor: string;
   /** Text drawn on the colored last-price label. */
   lastPriceText: string;
+  crosshairLine: string;
+  crosshairLabelBackground: string;
+  crosshairLabelText: string;
   fontFamily: string;
   /** CSS px. */
   fontSize: number;
@@ -24,6 +27,9 @@ export const DEFAULT_THEME: Readonly<ChartTheme> = {
   downColor: '#e2484d',
   flatColor: '#8f98a8',
   lastPriceText: '#ffffff',
+  crosshairLine: 'rgba(210, 216, 226, 0.55)',
+  crosshairLabelBackground: '#3a4150',
+  crosshairLabelText: '#eef1f6',
   fontFamily: 'ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace',
   fontSize: 11,
 };

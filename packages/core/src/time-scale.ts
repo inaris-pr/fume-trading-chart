@@ -3,7 +3,12 @@
  * computes calendars itself; this module builds a mapping from resolved `MarketSession`s.
  */
 import type { UnixMs } from './primitives.ts';
-import type { MarketSession, SessionMode } from './market-data.ts';
+import {
+  TIMEFRAMES,
+  type MarketSession,
+  type SessionMode,
+  type TimeframeId,
+} from './market-data.ts';
 import { selectWindows } from './sessions.ts';
 import { isoWeekStart } from './time-zone.ts';
 
@@ -42,6 +47,20 @@ export interface TimeScaleMapping {
 export type SlotSpec = { kind: 'intraday'; durationMs: number } | { kind: 'session' };
 
 const DAY_MS = 86_400_000;
+const UNIT_MS = { minute: 60_000, hour: 3_600_000 } as const;
+
+/**
+ * Slot spec for a timeframe: day timeframes use one slot per session; minute/hour timeframes use
+ * session-aligned buckets of that duration (e.g. 4h RTH: 09:30-13:30, then 13:30-16:00 clipped).
+ */
+export function slotSpecForTimeframe(timeframe: TimeframeId): SlotSpec {
+  const tf = TIMEFRAMES[timeframe];
+  if (tf.unit === 'day') {
+    if (tf.count !== 1) throw new Error(`Unsupported multi-day timeframe ${timeframe}`);
+    return { kind: 'session' };
+  }
+  return { kind: 'intraday', durationMs: tf.count * UNIT_MS[tf.unit] };
+}
 
 /** Contiguous run of slots: one open window (intraday) or one session (daily). */
 interface Segment {

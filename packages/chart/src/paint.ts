@@ -97,12 +97,13 @@ export function paintFrame(ctx: PaintContext, frame: Frame, theme: ChartTheme): 
   if (frame.lastPrice) {
     const { y, text, direction } = frame.lastPrice;
     const boxH = Math.round(LAST_PRICE_LABEL_HEIGHT * pr);
-    const boxY = Math.round(y * pr - boxH / 2);
+    // Pinned to the axis edge when the last price is scrolled out of view (manual price scale).
+    const boxY = Math.min(Math.max(Math.round(y * pr - boxH / 2), 0), Math.max(0, plotH - boxH));
     ctx.fillStyle = directionColor(direction, theme);
     ctx.fillRect(plotW, boxY, W - plotW, boxH);
     ctx.fillStyle = theme.lastPriceText;
     ctx.textAlign = 'left';
-    ctx.fillText(text, labelX, Math.round(y * pr));
+    ctx.fillText(text, labelX, boxY + boxH / 2);
   }
 }
 

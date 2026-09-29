@@ -147,6 +147,44 @@ Nothing in the chart assumes that bar _i_ sits at slot _i_.
 
 A per-user option to also compress empty in-session slots is **not** in the MVP. It could be added later without changing the interface, and would help thin extended-hours IEX data.
 
+### 4.2 Interaction layer (Stage 2, approved)
+
+**Two canvases per chart.** Both are owned by `FumeChart`, sized together from the same backing-store computation (DPR-correct), and removed by `destroy()` together with every listener.
+
+| Layer                   | Draws                                                       | Repainted when                                                     |
+| ----------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------ |
+| Main canvas             | Grid, candles, axes, session separators, last price         | Data, view, price scale or size change                             |
+| Overlay canvas (on top) | Crosshair lines, crosshair price/time readouts, OHLC legend | Every pointer move (no frame rebuild), and after each main repaint |
+
+The overlay receives all pointer, wheel and double-click events; the main canvas has `pointer-events: none`.
+
+**Atomic data replacement.** `chart.setData({ bars, timeScale, formatPrice, formatTime, minPriceStep, barSpacing?, rightOffset? })` replaces the series, its time scale and formatters in one step, then resets the view (latest bars, the given default spacing), the price scale (AUTO) and the crosshair. Symbol and timeframe switches use it, so no slot index, label or price range from the previous dataset can survive. `setBars` / `setOptions` remain for single-property changes.
+
+**Horizontal viewport** (`view-state.ts`, pure). The view is `{ barSpacing, rightOffset }`, the exact inputs of the Stage 1 viewport.
+
+- Wheel or trackpad pinch over the **plot** zooms, anchored at the slot under the pointer. On or right of the latest bar, the right offset in slots is kept instead, so the live edge does not jump. Mostly horizontal trackpad scrolling pans.
+- Drag in the **plot** pans with pointer capture.
+- Bounds: spacing 1–60 CSS px; at least 5 bars stay visible at either pan extreme; empty space right of the latest bar is at most 60% of the plot.
+
+**Vertical price scale** (`price-scale-state.ts`, pure). Two modes:
+
+| Mode           | Price range                                                         | Entered by                                                                                      |
+| -------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| AUTO (default) | Fitted to the visible bars on every repaint (Stage 1 behavior)      | Initial state; double-click on the price axis; `resetPriceScale()`; any `setData` / `resetView` |
+| MANUAL         | An absolute price range kept through horizontal pan/zoom and resize | Drag or wheel on the **price axis**                                                             |
+
+- **Price-axis drag** (primary button, pointer capture): dragging down compresses (larger range), up stretches (smaller range), continuously: `factor = exp(dy * 0.005)`, always recomputed from the range at drag start. The price under the pointer at drag start keeps its height.
+- **Price-axis wheel**: scrolling down compresses, up stretches, anchored at the price under the pointer, at most 2x per event. A wheel event over the price axis never zooms horizontally; one over the plot never touches the price scale.
+- **Limits**: range span at least two ticks, and at most the larger of 20x the whole data's price span and half the mid price. Results are always finite and positive.
+- Only the price → y transform changes; bar prices are never modified. The manual range is passed into `buildFrame`, so candles, ticks, the crosshair and its label all use the same active price scale.
+
+| Event                                  | Price-scale behavior                                               |
+| -------------------------------------- | ------------------------------------------------------------------ |
+| Horizontal pan / zoom                  | AUTO refits; MANUAL keeps its range                                |
+| Container resize / DPR change          | AUTO refits; MANUAL keeps the same price range over the new height |
+| Symbol or timeframe switch (`setData`) | Reset to AUTO                                                      |
+| Double-click on the price axis         | Reset to AUTO                                                      |
+
 **Performance rule:** each frame draws only the visible bars. Updating the live bar redraws the frame, but no layout is recomputed unless the viewport changed. Updates are batched through `requestAnimationFrame`.
 
 ## 5. Frontend/backend boundary

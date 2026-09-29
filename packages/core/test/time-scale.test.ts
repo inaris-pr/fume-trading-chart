@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { resolveWeeklySessions } from '../src/sessions.ts';
-import { createSessionTimeScale } from '../src/time-scale.ts';
+import { createSessionTimeScale, slotSpecForTimeframe } from '../src/time-scale.ts';
 import { EQUITY_SPEC, FUTURES_SPEC, HOUR, MIN, TEST_ID } from './helpers.ts';
 
 const equitySessions = (from: string, to: string) =>
@@ -173,4 +173,29 @@ test('rejects a non-positive intraday duration', () => {
       slot: { kind: 'intraday', durationMs: 0 },
     }),
   ).toThrow();
+});
+
+describe('slotSpecForTimeframe', () => {
+  test('every timeframe maps to its canonical slot spec', () => {
+    expect(slotSpecForTimeframe('1m')).toEqual({ kind: 'intraday', durationMs: MIN });
+    expect(slotSpecForTimeframe('5m')).toEqual({ kind: 'intraday', durationMs: 5 * MIN });
+    expect(slotSpecForTimeframe('15m')).toEqual({ kind: 'intraday', durationMs: 15 * MIN });
+    expect(slotSpecForTimeframe('1h')).toEqual({ kind: 'intraday', durationMs: HOUR });
+    expect(slotSpecForTimeframe('4h')).toEqual({ kind: 'intraday', durationMs: 4 * HOUR });
+    expect(slotSpecForTimeframe('1d')).toEqual({ kind: 'session' });
+  });
+
+  test('4H RTH mapping: slots start at 09:30 and 13:30; 15:59 is inside the short second slot', () => {
+    const map = createSessionTimeScale({
+      sessions: equitySessions('2026-03-02', '2026-03-03'),
+      sessionMode: 'regular',
+      slot: slotSpecForTimeframe('4h'),
+    });
+    const open = Date.UTC(2026, 2, 2, 14, 30);
+    expect(map.slotStart(0)).toBe(open);
+    expect(map.slotStart(1)).toBe(open + 4 * HOUR);
+    expect(map.slotStart(2)).toBe(Date.UTC(2026, 2, 3, 14, 30));
+    // 15:59 is 149 of the 150 minutes into the clipped 13:30-16:00 slot.
+    expect(map.toSlot(open + 389 * MIN)).toBeCloseTo(1 + 149 / 150, 12);
+  });
 });

@@ -10,6 +10,7 @@ import {
   computePriceRange,
   createPriceScale,
   priceTicks,
+  type PriceRange,
   type PriceScale,
 } from './price-scale.ts';
 import { createViewport, type Viewport } from './viewport.ts';
@@ -54,6 +55,8 @@ export interface FrameInput {
   formatPrice: PriceFormatter;
   formatTime: TimeFormatter;
   settings: FrameSettings;
+  /** Manual price range (price-scale MANUAL mode). When absent the range auto-fits the visible bars. */
+  priceRange?: PriceRange | null;
 }
 
 export interface PriceTick {
@@ -114,10 +117,12 @@ export function buildFrame(input: FrameInput, candles: CandleBuffer): Frame {
     edgeMargin: 18,
   });
 
-  const range = computePriceRange(series.bars, visible.from, visible.to, {
-    paddingRatio: settings.paddingRatio,
-    minPriceStep: settings.minPriceStep,
-  });
+  const range =
+    input.priceRange ??
+    computePriceRange(series.bars, visible.from, visible.to, {
+      paddingRatio: settings.paddingRatio,
+      minPriceStep: settings.minPriceStep,
+    });
   if (!range || plot.height <= 0 || plot.width <= 0) {
     return {
       layout,

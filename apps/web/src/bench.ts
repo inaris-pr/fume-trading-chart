@@ -1,10 +1,10 @@
 /**
- * Dev-only render benchmark (open /?bench). Measures the synchronous CPU cost of
- * FumeChart.render() (frame model + Canvas 2D commands) at several dataset sizes, in the default
- * view and with every bar squeezed into view. GPU rasterization is not included.
+ * Dev-only render benchmark (open /?bench). Measures the synchronous CPU cost of the chart's
+ * layers on SPY 1-minute demo data: full repaint (frame model + candles), overlay-only repaint
+ * (crosshair move), and full repaint at maximum zoom-out. GPU rasterization is not included.
  */
 import { FumeChart, type ChartEnvironment } from '@fume/chart';
-import { buildDemoDataset } from './demo/dataset.ts';
+import { DemoCatalog } from './demo/catalog.ts';
 
 /**
  * Benchmark environment: sizes the canvas synchronously from layout and schedules frames with
@@ -25,31 +25,27 @@ const benchEnvironment: ChartEnvironment = {
 
 interface Row {
   bars: number;
-  view: 'default' | 'all bars visible';
-  drawnCandles: number;
-  indexMs: number;
-  firstRenderMs: number;
-  redrawMedianMs: number;
-  redrawP95Ms: number;
+  setDataMs: number;
+  fullMedianMs: number;
+  overlayMedianMs: number;
+  zoomedOutCandles: number;
+  zoomedOutMedianMs: number;
 }
 
-const SIZES = [500, 1_000, 10_000] as const;
-const REDRAWS = 60;
+const SIZES = [1_000, 10_000, Number.POSITIVE_INFINITY] as const;
+const RUNS = 60;
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-function timeRedraws(chart: FumeChart): { median: number; p95: number } {
+function median(fn: () => void): number {
   const samples: number[] = [];
-  for (let i = 0; i < REDRAWS; i++) {
+  for (let i = 0; i < RUNS; i++) {
     const t = performance.now();
-    chart.render();
+    fn();
     samples.push(performance.now() - t);
   }
   samples.sort((a, b) => a - b);
-  return {
-    median: samples[Math.floor(samples.length / 2)]!,
-    p95: samples[Math.floor(samples.length * 0.95)]!,
-  };
+  return samples[Math.floor(samples.length / 2)]!;
 }
 
 export async function runBenchmark(root: HTMLElement): Promise<void> {
@@ -57,59 +53,44 @@ export async function runBenchmark(root: HTMLElement): Promise<void> {
     '<div class="bench"><h3>Fume render benchmark</h3><div class="bench-stage"></div><pre id="bench-results">running…</pre></div>';
   const stage = root.querySelector<HTMLDivElement>('.bench-stage')!;
   const output = root.querySelector<HTMLPreElement>('#bench-results')!;
+  const catalog = new DemoCatalog();
+  const spy = catalog.get('SPY', '1m');
   const rows: Row[] = [];
 
   for (const size of SIZES) {
-    const data = buildDemoDataset('spy', size);
-    const chart = new FumeChart(
-      stage,
-      {
-        timeScale: data.timeScale,
-        formatPrice: data.formatPrice,
-        formatTime: data.formatTime,
-        minPriceStep: data.minPriceStep,
-      },
-      benchEnvironment,
-    );
+    const bars = Number.isFinite(size) ? spy.bars.slice(-size) : spy.bars;
+    const chart = new FumeChart(stage, spy, benchEnvironment);
     await tick();
-
     let t = performance.now();
-    chart.setBars(data.bars);
-    const indexMs = performance.now() - t;
-    t = performance.now();
-    chart.render();
-    const firstRenderMs = performance.now() - t;
-    const defaultRun = timeRedraws(chart);
-    const defaultFrame = chart.getLastFrame()!;
-    rows.push({
-      bars: data.bars.length,
-      view: 'default',
-      drawnCandles: defaultFrame.candles.count,
-      indexMs,
-      firstRenderMs,
-      redrawMedianMs: defaultRun.median,
-      redrawP95Ms: defaultRun.p95,
-    });
+    chart.setData({ ...spy, bars });
+    const setDataMs = performance.now() - t;
+    chart.renderAll();
+    const fullMedianMs = median(() => chart.renderAll());
 
-    chart.setOptions({
-      barSpacing: defaultFrame.layout.plot.width / data.bars.length,
-      rightOffset: 0,
-    });
-    t = performance.now();
-    chart.render();
-    const firstAll = performance.now() - t;
-    const allRun = timeRedraws(chart);
+    // Put the crosshair in the middle of the plot, then time overlay-only repaints.
+    const overlay = stage.querySelectorAll('canvas')[1]!;
+    const rect = overlay.getBoundingClientRect();
+    const at = { clientX: rect.left + rect.width * 0.5, clientY: rect.top + rect.height * 0.5 };
+    overlay.dispatchEvent(new PointerEvent('pointermove', { ...at, pointerId: 1 }));
+    const overlayMedianMs = median(() => chart.renderOverlayOnly());
+
+    // Zoom out to the minimum bar spacing with wheel events at the plot center.
+    for (let i = 0; i < 12; i++) {
+      overlay.dispatchEvent(new WheelEvent('wheel', { ...at, deltaY: 1000, cancelable: true }));
+    }
+    chart.renderAll();
+    const zoomedOutCandles = chart.getLastFrame()!.candles.count;
+    const zoomedOutMedianMs = median(() => chart.renderAll());
     rows.push({
-      bars: data.bars.length,
-      view: 'all bars visible',
-      drawnCandles: chart.getLastFrame()!.candles.count,
-      indexMs: 0,
-      firstRenderMs: firstAll,
-      redrawMedianMs: allRun.median,
-      redrawP95Ms: allRun.p95,
+      bars: bars.length,
+      setDataMs,
+      fullMedianMs,
+      overlayMedianMs,
+      zoomedOutCandles,
+      zoomedOutMedianMs,
     });
-    await tick();
     chart.destroy();
+    await tick();
   }
 
   const environment = {
@@ -118,14 +99,14 @@ export async function runBenchmark(root: HTMLElement): Promise<void> {
     hardwareConcurrency: navigator.hardwareConcurrency,
     stage: `${stage.clientWidth}x${stage.clientHeight} CSS px`,
   };
-  const fmt = (n: number) => n.toFixed(2).padStart(8);
+  const fmt = (n: number) => n.toFixed(2).padStart(9);
   output.textContent = [
     JSON.stringify(environment, null, 2),
     '',
-    'bars    view               drawn  index(ms) first(ms) median(ms) p95(ms)',
+    'bars     setData(ms) full(ms)  overlay(ms) zoomedOut:candles full(ms)',
     ...rows.map(
       (r) =>
-        `${String(r.bars).padEnd(7)} ${r.view.padEnd(18)} ${String(r.drawnCandles).padStart(5)} ${fmt(r.indexMs)} ${fmt(r.firstRenderMs)} ${fmt(r.redrawMedianMs)} ${fmt(r.redrawP95Ms)}`,
+        `${String(r.bars).padEnd(8)}${fmt(r.setDataMs)}${fmt(r.fullMedianMs)}${fmt(r.overlayMedianMs)}   ${String(r.zoomedOutCandles).padStart(8)}${fmt(r.zoomedOutMedianMs)}`,
     ),
   ].join('\n');
   (window as unknown as { __fumeBench: unknown }).__fumeBench = { environment, rows };
