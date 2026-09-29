@@ -1,0 +1,16 @@
+{
+  "name": "@fume/chart",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Fume's framework-independent Canvas 2D financial chart engine.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@fume/core": "workspace:*"
+  }
+}

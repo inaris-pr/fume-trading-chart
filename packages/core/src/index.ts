@@ -3,3 +3,7 @@ export type * from './instrument.ts';
 export * from './market-data.ts';
 export * from './trading.ts';
 export type * from './providers.ts';
+export * from './time-zone.ts';
+export * from './sessions.ts';
+export * from './time-scale.ts';
+export * from './format.ts';

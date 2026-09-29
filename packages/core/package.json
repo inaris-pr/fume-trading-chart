@@ -2,10 +2,11 @@
   "name": "@fume/core",
   "version": "0.0.0",
   "private": true,
-  "description": "Provider-neutral Fume domain model and provider interfaces. No DOM, no provider SDKs.",
+  "description": "Provider-neutral Fume domain model, provider interfaces and pure logic. No DOM, no provider SDKs.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./fixtures": "./src/fixtures/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
