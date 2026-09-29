@@ -79,7 +79,7 @@ Only `packages/core` exists after Stage 0. Other folders are created in the stag
 **Dependency rules.** Violating these fails review:
 
 - `core` → nothing.
-- `chart` → nothing (it defines its own minimal input types, structurally compatible with `core.Bar`).
+- `chart` → `core`, **type-only** (approved at Stage 1 review, 2026-09-29). `@fume/chart` may `import type` canonical domain contracts from `@fume/core`, such as `Bar`, `TimeScaleMapping` and the formatter/domain types, so the chart consumes the Stage 0 model instead of a second candle model. It must **not** gain a runtime dependency on `@fume/core`: no value imports, and `@fume/core` stays a `devDependency` of the chart package, used only for type resolution. Changing this needs an explicit architecture review. Enforced by `test/boundaries.test.ts`.
 - `web` → `core`, `chart`.
 - `worker` → `core`.
 - Nothing imports from `worker/src/providers/*` except the Worker's composition root.

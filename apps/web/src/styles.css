@@ -1,0 +1,96 @@
+:root {
+  color-scheme: dark;
+  --bg: #0e1014;
+  --panel: #13161c;
+  --border: #22262e;
+  --text: #d5dae3;
+  --muted: #8f98a8;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.symbol {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.meta,
+.feed {
+  color: var(--muted);
+}
+
+.price {
+  font-variant-numeric: tabular-nums;
+}
+
+.feed {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.chart-area {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+}
+
+/* The engine sizes its canvas to this box; it must be positioned and have a real size. */
+.chart-host {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.bench {
+  padding: 16px;
+  font:
+    13px ui-monospace,
+    Consolas,
+    monospace;
+}
+
+.bench-stage {
+  position: relative;
+  width: 1400px;
+  height: 800px;
+  max-width: 100%;
+}

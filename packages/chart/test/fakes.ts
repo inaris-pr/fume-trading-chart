@@ -1,0 +1,180 @@
+import {
+  createPriceFormatter,
+  createSessionTimeScale,
+  createTimeFormatter,
+  resolveWeeklySessions,
+  type Bar,
+  type InstrumentId,
+  type SessionWindow,
+  type TimeScaleMapping,
+} from '@fume/core';
+import { generateSyntheticBars } from '@fume/core/fixtures';
+import type { ChartEnvironment, ElementSize } from '../src/environment.ts';
+
+export const MIN = 60_000;
+
+/** Records every draw call; implements the PaintContext subset plus getContext plumbing. */
+export class RecordingContext {
+  fillStyle: string | CanvasGradient | CanvasPattern = '#000';
+  font = '10px sans-serif';
+  textAlign: CanvasTextAlign = 'start';
+  textBaseline: CanvasTextBaseline = 'alphabetic';
+  readonly rects: { x: number; y: number; w: number; h: number; style: string }[] = [];
+  readonly texts: { text: string; x: number; y: number; style: string; align: CanvasTextAlign }[] =
+    [];
+  setTransform(): void {}
+  save(): void {}
+  restore(): void {}
+  beginPath(): void {}
+  rect(): void {}
+  clip(): void {}
+  fillRect(x: number, y: number, w: number, h: number): void {
+    this.rects.push({ x, y, w, h, style: String(this.fillStyle) });
+  }
+  fillText(text: string, x: number, y: number): void {
+    this.texts.push({ text, x, y, style: String(this.fillStyle), align: this.textAlign });
+  }
+  measureText(text: string): TextMetrics {
+    return { width: text.length * 7 } as TextMetrics;
+  }
+}
+
+export interface FakeCanvas {
+  width: number;
+  height: number;
+  style: Record<string, string>;
+  removed: boolean;
+  ctx: RecordingContext;
+  getContext(): RecordingContext;
+  remove(): void;
+}
+
+export function fakeCanvas(): FakeCanvas {
+  const ctx = new RecordingContext();
+  return {
+    width: 0,
+    height: 0,
+    style: {},
+    removed: false,
+    ctx,
+    getContext: () => ctx,
+    remove() {
+      this.removed = true;
+    },
+  };
+}
+
+/** Fake browser: manual animation frames, manual resize, disposers that are tracked. */
+export class FakeEnvironment implements ChartEnvironment {
+  dpr = 1;
+  readonly canvases: FakeCanvas[] = [];
+  readonly frames = new Map<number, () => void>();
+  resizeCallback: ((size: ElementSize) => void) | null = null;
+  pixelRatioCallback: (() => void) | null = null;
+  activeObservers = 0;
+  activeRatioWatchers = 0;
+  private nextHandle = 1;
+
+  createCanvas(): HTMLCanvasElement {
+    const canvas = fakeCanvas();
+    this.canvases.push(canvas);
+    return canvas as unknown as HTMLCanvasElement;
+  }
+  devicePixelRatio(): number {
+    return this.dpr;
+  }
+  requestFrame(callback: () => void): number {
+    const handle = this.nextHandle++;
+    this.frames.set(handle, callback);
+    return handle;
+  }
+  cancelFrame(handle: number): void {
+    this.frames.delete(handle);
+  }
+  observeResize(_target: HTMLElement, callback: (size: ElementSize) => void): () => void {
+    this.resizeCallback = callback;
+    this.activeObservers++;
+    return () => {
+      this.activeObservers--;
+      this.resizeCallback = null;
+    };
+  }
+  watchPixelRatio(callback: () => void): () => void {
+    this.pixelRatioCallback = callback;
+    this.activeRatioWatchers++;
+    return () => {
+      this.activeRatioWatchers--;
+      this.pixelRatioCallback = null;
+    };
+  }
+  /** Runs all pending animation frames; returns how many ran. */
+  flushFrames(): number {
+    const pending = [...this.frames.values()];
+    this.frames.clear();
+    for (const f of pending) f();
+    return pending.length;
+  }
+}
+
+export function fakeContainer(): HTMLElement & { children: unknown[] } {
+  const children: unknown[] = [];
+  return {
+    children,
+    appendChild: (node: unknown) => children.push(node),
+  } as unknown as HTMLElement & {
+    children: unknown[];
+  };
+}
+
+const weekdays = (start: string, end: string): SessionWindow[] =>
+  ([1, 2, 3, 4, 5] as const).map((startDay) => ({ startDay, start, end }));
+
+/** 10 RTH sessions of deterministic 5m bars (780 slots) plus the mapping and formatters. */
+export function demoSeries(options: { dropIndices?: number[]; count?: number } = {}): {
+  bars: Bar[];
+  mapping: TimeScaleMapping;
+  formatPrice: (p: number) => string;
+  formatTime: ReturnType<typeof createTimeFormatter>;
+} {
+  const sessions = resolveWeeklySessions({
+    instrumentId: 'eq:TEST' as InstrumentId,
+    spec: {
+      timezone: 'America/New_York',
+      regular: weekdays('09:30', '16:00'),
+      extended: [],
+      calendarId: 'TEST',
+    },
+    from: '2026-03-02',
+    to: '2026-03-20',
+  });
+  const bars = generateSyntheticBars({
+    seed: 7,
+    sessions,
+    sessionMode: 'regular',
+    durationMs: 5 * MIN,
+    count: options.count ?? 780,
+    startPrice: 574.25,
+    tickSize: 0.01,
+    walk: 'multiplicative',
+    volatility: 0.0008,
+    gapVolatility: 0.0045,
+    dojiProbability: 0.05,
+    longWickProbability: 0.03,
+    baseVolume: 42_000,
+    ...(options.dropIndices ? { dropIndices: options.dropIndices } : {}),
+  });
+  return {
+    bars,
+    mapping: createSessionTimeScale({
+      sessions,
+      sessionMode: 'regular',
+      slot: { kind: 'intraday', durationMs: 5 * MIN },
+    }),
+    formatPrice: createPriceFormatter({ kind: 'decimal', decimals: 2 }),
+    formatTime: createTimeFormatter('America/New_York'),
+  };
+}
+
+export function bar(start: number, open: number, high: number, low: number, close: number): Bar {
+  return { start, open, high, low, close, volume: 1, status: 'final', revision: 0 };
+}

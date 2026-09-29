@@ -4,7 +4,7 @@ A single-user, web-based trading chart with a **custom Canvas 2D chart engine**,
 
 Alpaca (Basic plan, IEX feed, paper trading) is the _first_ provider behind provider-neutral interfaces. The chart and domain model don't depend on it.
 
-> **Status: Stage 0 (architecture).** No application code yet. See [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/roadmap.md](docs/roadmap.md).
+> **Status: Stage 1 (custom Canvas chart on deterministic data).** No market data, backend or trading yet. See [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/roadmap.md](docs/roadmap.md).
 
 ## Scope
 
@@ -15,9 +15,10 @@ Explicitly out of scope for the MVP: indicators, drawing tools, watchlists, scan
 ## Repository layout
 
 ```
-packages/core   provider-neutral domain types + provider interfaces (exists)
-packages/chart  Canvas chart engine          (Stage 1)
-apps/web        frontend                     (Stage 1)
+packages/core   provider-neutral domain types, provider interfaces, session/time-scale logic,
+                formatters, deterministic fixtures (@fume/core/fixtures)
+packages/chart  framework-independent Canvas 2D chart engine
+apps/web        React + Vite shell hosting the chart (deterministic demo data)
 apps/worker     Cloudflare Worker backend    (Stage 4)
 docs/           design, contracts, research, roadmap
 ```
@@ -37,6 +38,22 @@ pnpm typecheck
 ```bash
 pnpm format:check
 ```
+
+```bash
+pnpm test
+```
+
+```bash
+pnpm build
+```
+
+Run the app locally (http://localhost:5173):
+
+```bash
+pnpm dev
+```
+
+Dev-only query parameters: `?scenario=flat|negative|subpenny` (scale edge cases), `?bars=N` (dataset size), `?bench` (render benchmark, see [docs/performance.md](docs/performance.md)).
 
 ## Credentials
 

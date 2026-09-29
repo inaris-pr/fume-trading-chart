@@ -8,12 +8,17 @@
     "node": ">=22"
   },
   "scripts": {
-    "typecheck": "pnpm -r --if-present typecheck",
+    "dev": "pnpm --filter @fume/web dev",
+    "build": "pnpm --filter @fume/web build",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json && pnpm -r --if-present typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
   "devDependencies": {
+    "@types/node": "^24.19.0",
     "prettier": "3.9.9",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitest": "~4.1.11"
   }
 }
