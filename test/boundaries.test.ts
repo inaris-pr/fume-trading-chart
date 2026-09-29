@@ -112,3 +112,40 @@ describe('dependency tree', () => {
     for (const name of banned) expect(lock, name).not.toContain(name);
   });
 });
+
+describe('Stage 2 stays offline and provider-neutral', () => {
+  const dirs = ['packages/core/src', 'packages/chart/src', 'apps/web/src'];
+  const forbidden = [
+    /alpaca/i,
+    /\bAPCA\b/,
+    /\bfetch\s*\(/,
+    /new\s+WebSocket\s*\(/,
+    /\bXMLHttpRequest\b/,
+    /\bEventSource\b/,
+    /['"`](?:https?|wss?):\/\//,
+  ];
+
+  // Comments are stripped: Stage 0 doc comments legitimately name Alpaca as an example provider.
+  const code = (file: string) =>
+    read(file)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+  test('no provider names, network calls or endpoints in core, chart or the web shell', () => {
+    for (const dir of dirs) {
+      for (const file of sourceFiles(join(root, dir))) {
+        const source = code(file);
+        for (const pattern of forbidden)
+          expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+      }
+    }
+  });
+
+  test('ticker and timeframe logic lives in the app shell, not in the chart engine', () => {
+    for (const file of sourceFiles(join(root, 'packages/chart/src'))) {
+      const code = read(file);
+      expect(code, file).not.toMatch(/\b(QQQ|AAPL|NVDA|TSLA)\b/);
+      expect(code, file).not.toMatch(/['"](1m|5m|15m|1h|4h|1d)['"]/);
+    }
+  });
+});

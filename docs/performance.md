@@ -38,3 +38,26 @@ Two production runs (the ranges show run-to-run variance):
   min/max bar per column when `barSpacing` < 1 device px). It's local to `frame.ts`, doesn't change
   the architecture, and should be measured again in Stage 2 before it's built.
 - There's no reason to consider WebGL.
+
+## Stage 2 interaction baseline
+
+Measured 2026-09-29 with `/?bench` against the production build. Environment: Chromium 152 (built-in
+browser, hidden tab), `devicePixelRatio` 1, 12 logical cores, stage 977×800 CSS px. Data: SPY
+deterministic 1-minute bars (the last N bars, and the full 66,277-bar series). Two runs are shown as
+ranges; times are medians of 60 synchronous calls.
+
+| Bars   | `setData` (index + axis measure) | Full repaint (frame + candles) | Overlay-only repaint (crosshair move) | Max zoom-out: candles drawn / full repaint |
+| ------ | -------------------------------- | ------------------------------ | ------------------------------------- | ------------------------------------------ |
+| 1,000  | 5.5–5.7 ms                       | 0.6–0.7 ms                     | 0.2 ms                                | 534 / 1.1–1.3 ms                           |
+| 10,000 | 8.8–12.2 ms                      | 0.4–0.5 ms                     | 0.1 ms                                | 534 / 0.8–1.2 ms                           |
+| 66,277 | 77–90 ms                         | 0.5 ms                         | 0.1 ms                                | 534 / 0.8–1.0 ms                           |
+
+- **Pointer moves never rebuild candles.** The crosshair lives on the overlay canvas, so a move
+  costs about 0.1–0.2 ms, regardless of dataset size.
+- **Pan and zoom** repaint the main layer at about 0.5–1.3 ms, because only visible bars are
+  processed. The minimum bar spacing (1 CSS px) and bounded right overscroll keep the worst case
+  small. The Stage 1 stress case (10k candles squeezed into ~660 px, ~24–30 ms) is no longer
+  reachable through interaction.
+- **Switching to 1m (66k bars) costs ~80–90 ms once**, dominated by mapping every bar to its slot in
+  `setData`. It happens once per switch, not per frame. If it becomes noticeable with real data, the
+  first optimization is indexing lazily or in chunks; no architectural change is needed.

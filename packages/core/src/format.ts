@@ -7,7 +7,11 @@ import type { PriceFormat, TickRule } from './instrument.ts';
 
 export type PriceFormatter = (price: number) => string;
 
-export type TimeLabelGranularity = 'year' | 'month' | 'day' | 'time';
+/**
+ * Axis labels use year/month/day/time; crosshair readouts use `date` (daily slots) and
+ * `datetime` (intraday slots).
+ */
+export type TimeLabelGranularity = 'year' | 'month' | 'day' | 'time' | 'date' | 'datetime';
 export type TimeFormatter = (timeMs: UnixMs, granularity: TimeLabelGranularity) => string;
 
 export function createPriceFormatter(format: PriceFormat): PriceFormatter {
@@ -58,6 +62,16 @@ const TIME_LABEL_OPTIONS: Record<TimeLabelGranularity, Intl.DateTimeFormatOption
   month: { month: 'short' },
   day: { month: 'short', day: 'numeric' },
   time: { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' },
+  date: { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' },
+  datetime: {
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  },
 };
 
 /** Axis-label formatter in the instrument's session time zone. */

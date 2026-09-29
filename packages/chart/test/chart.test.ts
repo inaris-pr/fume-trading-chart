@@ -19,21 +19,40 @@ function setup(dpr = 1) {
     env,
   );
   const canvas = env.canvases[0]!;
-  return { env, container, data, chart, canvas };
+  const overlay = env.canvases[1]!;
+  return { env, container, data, chart, canvas, overlay };
 }
 
 describe('FumeChart lifecycle', () => {
-  test('creates one canvas in the container and observes size and DPR', () => {
-    const { env, container, canvas } = setup();
-    expect(container.children).toEqual([canvas]);
+  test('creates the main canvas and the overlay canvas; observes size and DPR', () => {
+    const { env, container, canvas, overlay } = setup();
+    expect(container.children).toEqual([canvas, overlay]);
+    expect(env.canvases).toHaveLength(2);
     expect(env.activeObservers).toBe(1);
     expect(env.activeRatioWatchers).toBe(1);
+    // Only the overlay receives input; the main canvas ignores pointer events.
+    expect(canvas.listenerCount()).toBe(0);
+    expect(canvas.style.pointerEvents).toBe('none');
+    expect([...overlay.listeners.keys()].sort()).toEqual(
+      [
+        'dblclick',
+        'lostpointercapture',
+        'pointercancel',
+        'pointerdown',
+        'pointerleave',
+        'pointermove',
+        'pointerup',
+        'wheel',
+      ].sort(),
+    );
+    expect(overlay.style.touchAction).toBe('none');
   });
 
   test('backing store follows CSS size x DPR on resize', () => {
     const { env, canvas } = setup(2);
     env.resizeCallback!({ cssWidth: 800, cssHeight: 500 });
     expect([canvas.width, canvas.height]).toEqual([1600, 1000]);
+    expect([env.canvases[1]!.width, env.canvases[1]!.height]).toEqual([1600, 1000]);
     env.dpr = 3;
     env.pixelRatioCallback!();
     expect([canvas.width, canvas.height]).toEqual([2400, 1500]);
@@ -88,6 +107,8 @@ describe('FumeChart lifecycle', () => {
     expect(env.frames.size).toBe(1);
     chart.destroy();
     expect(canvas.removed).toBe(true);
+    expect(env.canvases[1]!.removed).toBe(true);
+    expect(env.canvases[1]!.listenerCount()).toBe(0);
     expect(env.activeObservers).toBe(0);
     expect(env.activeRatioWatchers).toBe(0);
     expect(env.frames.size).toBe(0);

@@ -34,9 +34,9 @@ body,
 
 .app-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 14px;
-  padding: 10px 16px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
   font-size: 13px;
@@ -47,18 +47,61 @@ body,
   letter-spacing: 0.04em;
 }
 
-.symbol {
+.symbol-picker select {
+  appearance: auto;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-family: inherit;
+  font-size: 14px;
   font-weight: 600;
-  font-size: 15px;
+}
+
+.timeframes {
+  display: flex;
+  gap: 2px;
+}
+
+.timeframes button {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.timeframes button:hover {
+  color: var(--text);
+}
+
+.timeframes button[aria-pressed='true'] {
+  color: var(--text);
+  background: #232833;
+  border-color: #343b48;
+}
+
+.symbol-picker select:focus-visible,
+.timeframes button:focus-visible {
+  outline: 2px solid #5b8def;
+  outline-offset: 1px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .meta,
 .feed {
   color: var(--muted);
-}
-
-.price {
-  font-variant-numeric: tabular-nums;
 }
 
 .feed {

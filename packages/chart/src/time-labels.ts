@@ -77,6 +77,8 @@ export function buildTimeAxis(args: {
       const next = boundaries[i + 1]?.slot ?? Number.POSITIVE_INFINITY;
       const first = b.slot + Math.max(step, Math.ceil((from - b.slot) / step) * step);
       for (let s = first; s < next && s <= to; s += step) {
+        // Past the last resolved session the mapping only extrapolates; never label those times.
+        if (!isResolvedSlot(mapping, s)) break;
         candidates.push({ slot: s, rank: 0, granularity: 'time' });
       }
     });
@@ -106,6 +108,14 @@ export function buildTimeAxis(args: {
           .map((b) => viewport.slotToX(b.slot) - spacing / 2);
 
   return { labels: accepted, separators, slotDurationMs };
+}
+
+/**
+ * True when `slot` lies inside the mapping's resolved sessions: its start time maps back to the
+ * same slot. Extrapolated slots (before the first / after the last resolved session) fail this.
+ */
+export function isResolvedSlot(mapping: TimeScaleMapping, slot: number): boolean {
+  return mapping.toSlot(mapping.slotStart(slot)) === slot;
 }
 
 /**

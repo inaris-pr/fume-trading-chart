@@ -1,7 +1,7 @@
 import type { EventTime, InstrumentId, ProviderId, UnixMs } from './primitives.ts';
 import type { StreamState } from './providers.ts';
 
-export type TimeframeId = '1m' | '5m' | '15m' | '1h' | '1d';
+export type TimeframeId = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 
 export interface Timeframe {
   id: TimeframeId;
@@ -14,6 +14,7 @@ export const TIMEFRAMES: Readonly<Record<TimeframeId, Timeframe>> = {
   '5m': { id: '5m', unit: 'minute', count: 5 },
   '15m': { id: '15m', unit: 'minute', count: 15 },
   '1h': { id: '1h', unit: 'hour', count: 1 },
+  '4h': { id: '4h', unit: 'hour', count: 4 },
   '1d': { id: '1d', unit: 'day', count: 1 },
 };
 

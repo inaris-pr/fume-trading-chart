@@ -1,46 +1,51 @@
 import { useEffect, useRef } from 'react';
-import { FumeChart } from '@fume/chart';
-import type { Bar, PriceFormatter, TimeFormatter, TimeScaleMapping } from '@fume/core';
+import { FumeChart, type ChartData } from '@fume/chart';
 
 export interface ChartHostProps {
-  bars: readonly Bar[];
-  timeScale: TimeScaleMapping;
-  formatPrice: PriceFormatter;
-  formatTime: TimeFormatter;
-  minPriceStep: number;
+  /** One series: bars, time scale, formatters, tick and initial view. Replaced atomically. */
+  data: ChartData;
 }
 
 /**
- * Hosts the framework-independent FumeChart. React only provides the container and forwards
- * props into imperative calls; it never renders, sizes or animates the chart. The engine observes
- * the container's size itself.
+ * Hosts the framework-independent FumeChart. React only provides the container, creates and
+ * destroys the engine, and hands it new data. Zoom, pan, crosshair, sizing and rendering all live
+ * in the engine; none of it goes through React state.
  */
-export function ChartHost(props: ChartHostProps) {
+export function ChartHost({ data }: ChartHostProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<FumeChart | null>(null);
-  const latestProps = useRef(props);
-  latestProps.current = props;
+  const appliedRef = useRef<ChartData | null>(null);
+  const latestData = useRef(data);
+  latestData.current = data;
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const { bars, timeScale, formatPrice, formatTime, minPriceStep } = latestProps.current;
-    const chart = new FumeChart(container, { timeScale, formatPrice, formatTime, minPriceStep });
-    chart.setBars(bars);
+    const initial = latestData.current;
+    const chart = new FumeChart(container, {
+      timeScale: initial.timeScale,
+      formatPrice: initial.formatPrice,
+      formatTime: initial.formatTime,
+      minPriceStep: initial.minPriceStep,
+    });
+    chart.setData(initial);
     chartRef.current = chart;
+    appliedRef.current = initial;
+    // Dev-only QA handle (stripped from production builds): read engine state from the console.
+    if (import.meta.env.DEV) (window as unknown as { __fumeChart?: FumeChart }).__fumeChart = chart;
     return () => {
       chart.destroy();
       chartRef.current = null;
+      appliedRef.current = null;
     };
   }, []);
 
-  const { bars, timeScale, formatPrice, formatTime, minPriceStep } = props;
   useEffect(() => {
-    chartRef.current?.setOptions({ timeScale, formatPrice, formatTime, minPriceStep });
-  }, [timeScale, formatPrice, formatTime, minPriceStep]);
-  useEffect(() => {
-    chartRef.current?.setBars(bars);
-  }, [bars]);
+    const chart = chartRef.current;
+    if (!chart || appliedRef.current === data) return;
+    chart.setData(data);
+    appliedRef.current = data;
+  }, [data]);
 
   return <div ref={containerRef} className="chart-host" data-testid="fume-chart" />;
 }

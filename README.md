@@ -4,7 +4,7 @@ A single-user, web-based trading chart with a **custom Canvas 2D chart engine**,
 
 Alpaca (Basic plan, IEX feed, paper trading) is the _first_ provider behind provider-neutral interfaces. The chart and domain model don't depend on it.
 
-> **Status: Stage 1 (custom Canvas chart on deterministic data).** No market data, backend or trading yet. See [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/roadmap.md](docs/roadmap.md).
+> **Status: Stage 2 (chart interaction and controls on deterministic data).** Zoom, pan, crosshair, symbol and timeframe controls on replay data. No market data, backend or trading yet. See [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/roadmap.md](docs/roadmap.md).
 
 ## Scope
 
@@ -53,7 +53,9 @@ Run the app locally (http://localhost:5173):
 pnpm dev
 ```
 
-Dev-only query parameters: `?scenario=flat|negative|subpenny` (scale edge cases), `?bars=N` (dataset size), `?bench` (render benchmark, see [docs/performance.md](docs/performance.md)).
+Chart controls: mouse wheel / trackpad pinch over the chart zooms around the pointer, drag pans, the crosshair shows price, time and OHLC. On the right price axis, drag or wheel to stretch/compress prices (manual scale) and double-click to return to auto-fit. Symbols (SPY, QQQ, AAPL, NVDA, TSLA) and timeframes (1D, 4H, 1H, 15m, 5m, 1m) are deterministic replay data.
+
+Dev-only query parameters: `?symbol=SPY&tf=1h` (initial selection; also `SYN-FLAT`, `SYN-NEG`, `SYN-SUB` scale edge cases), `?bench` (render benchmark, see [docs/performance.md](docs/performance.md)).
 
 ## Credentials
 

@@ -7,3 +7,4 @@ export * from './time-zone.ts';
 export * from './sessions.ts';
 export * from './time-scale.ts';
 export * from './format.ts';
+export * from './aggregate.ts';
