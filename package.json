@@ -1,0 +1,19 @@
+{
+  "name": "fume-trading-chart",
+  "private": true,
+  "description": "Fume: custom Canvas trading chart with provider-neutral market data and brokerage adapters.",
+  "type": "module",
+  "packageManager": "pnpm@10.26.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --if-present typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "3.9.9",
+    "typescript": "7.0.2"
+  }
+}

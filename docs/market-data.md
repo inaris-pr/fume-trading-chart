@@ -1,0 +1,152 @@
+# Market data: canonical candles, historical/live reconciliation
+
+## Owner decisions this design implements
+
+- **Q4:** charts show **regular trading hours by default**. Extended hours are supported by the architecture (`SessionMode = 'regular' | 'extended'`) but aren't enabled in the MVP.
+- **Q5:** intraday candles are **session-aligned** and **built by Fume** from lower-timeframe data. Fume never depends on a provider's native 1h (or daily) candles.
+
+## Canonical candles (provider-neutral)
+
+A **canonical candle** is defined only by the instrument's session windows, the session mode and the timeframe. The provider doesn't enter into it.
+
+**1. Select windows.** For each trading day, `MarketSession.windows` are filtered by session mode:
+
+- `regular`: windows with `kind = 'regular'`;
+- `extended`: all windows.
+
+Equities RTH is one window, 09:30–16:00 ET, with early closes applied by the calendar. Futures supply their own windows, which may cross midnight and have breaks.
+
+**2. Intraday buckets** (`1m`, `5m`, `15m`, `1h`, duration `D`). For the selected window `W` containing `t`:
+
+```
+start = W.start + floor((t − W.start) / D) · D
+end   = min(start + D, W.end)
+```
+
+Buckets are anchored at the window start and **clipped at the window end**, so the last bucket may be shorter. A bucket never spans two windows, a break or a session boundary.
+
+The arithmetic is on absolute UTC milliseconds, within a window that was already resolved to UTC for that specific day. So DST changes the window's UTC position, never the bucket arithmetic.
+
+**3. Daily bucket** (`1d`): one per `sessionDate`, covering all selected windows of that session. `start` = the first selected window's start. The session date is not the UTC or local calendar date (futures sessions begin the previous evening).
+
+**US equities, regular mode, 1h:**
+
+| Normal day          | Early close (13:00) |
+| ------------------- | ------------------- |
+| 09:30–10:30         | 09:30–10:30         |
+| 10:30–11:30         | 10:30–11:30         |
+| 11:30–12:30         | 11:30–12:30         |
+| 12:30–13:30         | 12:30–13:00 (short) |
+| 13:30–14:30         |                     |
+| 14:30–15:30         |                     |
+| 15:30–16:00 (short) |                     |
+
+For `5m` and `15m`, anchoring at 09:30 gives the same boundaries as clock alignment, because 09:30 is a multiple of both.
+
+Candle fields: `open` = first, `close` = last, `high`/`low` = max/min, `volume` = Σ. `tradeCount` = Σ only if every input has it. `vwap` = Σ(vwap·volume)/Σvolume only if every input has it, otherwise omitted. There are **no synthetic bars**: a bucket with no input has no candle, and it shows as an empty slot on the time axis.
+
+## Historical canonical candles (built server-side by `@fume/core`)
+
+`GET /api/v1/bars` always returns **canonical** candles. The Worker builds them from provider **base bars**:
+
+1. A provider adapter declares the native bar intervals it serves (`nativeIntervalsMinutes`, e.g. `[1, 5, 15]`), each **epoch-aligned**: boundaries at multiples of the interval since the Unix epoch, UTC. It declares only intervals whose alignment and start-labeling are verified (spike S1).
+2. For the requested timeframe and session windows, the backend chooses the **coarsest native interval `B` that nests exactly**: every canonical bucket boundary must be a multiple of `B`. If none nests, it uses `1m`.
+3. Base bars outside the selected windows are dropped (e.g. extended-hours bars in regular mode). Base bars are then folded into canonical buckets with the rules above.
+4. **A base bar that would straddle a canonical boundary is a configuration error.** It's rejected loudly, never silently split or assigned.
+
+**Expected choice for Alpaca IEX, regular mode** (pending S1):
+
+| Timeframe | Base    | Why                                                                                                                                                                                                                     |
+| --------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1m        | `1Min`  |                                                                                                                                                                                                                         |
+| 5m        | `5Min`  | 09:30 and 16:00 are 5-minute boundaries                                                                                                                                                                                 |
+| 15m       | `15Min` | same, for 15 minutes                                                                                                                                                                                                    |
+| 1h        | `15Min` | session-aligned hours (09:30, 10:30, …, 15:30, 16:00) are all 15-minute boundaries; Alpaca's native `1Hour` isn't used                                                                                                  |
+| 1d        | `15Min` | the RTH daily candle = fold of the session's regular-window 15m bars. Alpaca's `1Day` isn't used, because its session definition (extended-hours inclusion) is unverified and would break the "regular by default" rule |
+
+Cost check against the Basic 200 requests/min limit: 500 hourly candles ≈ 72 sessions ≈ 1,900 15m base bars, which is **one** provider request (limit 10,000). A year of daily candles is ≈ 6,500 15m bars, also one request.
+
+If S1 shows Alpaca's 5m/15m bars aren't epoch-aligned or start-labeled, the adapter declares `[1]` only. Candles stay identical; only cost rises (1h = 390 base bars per session).
+
+**Consistency check (S1):** for one full day, canonical candles built from `15Min` base bars must equal those built from `1Min` base bars (OHLC exact, volume exact). This proves the base-interval choice doesn't change results.
+
+## Live data
+
+| Need                                       | Normalized event    | Alpaca source                        | Status                               |
+| ------------------------------------------ | ------------------- | ------------------------------------ | ------------------------------------ |
+| **Every trade, driving the active candle** | `trade`             | `trades` channel                     | VERIFIED                             |
+| Official completed minute (reconciliation) | `bar` final, `1m`   | `bars`, right after each minute      | VERIFIED                             |
+| Correction of a completed minute           | `bar` revised, `1m` | `updatedBars`, after the half-minute | VERIFIED                             |
+| Halts                                      | `instrument_status` | `statuses`                           | VERIFIED channel; mapping UNVERIFIED |
+
+Alpaca `dailyBars` isn't subscribed in the MVP: Fume builds the daily candle itself (see above). The `bar` event's `interval: 'session'` and `phase: 'provisional'` stay in the contract for providers whose running bars match Fume's session rules.
+
+**Two mechanisms, two jobs:**
+
+1. **Live display (trades).** Every normalized `trade` updates the active candle of the displayed timeframe immediately.
+2. **Reconciliation (official minute bars).** Provider final and revised 1m bars replace the minute Fume built from trades (the provider may exclude some trade conditions; spike S4 measures this). Canonical candles are then re-folded from the corrected minutes. This happens silently and never delays live updates.
+
+**Session mode on the live path:** the hub forwards every trade. In regular mode, the client aggregator ignores trades and minute bars whose time isn't inside a selected window, so pre/post-market prints don't appear. The current-price line follows the same rule. Its label shows the last regular-session price with an "after hours" marker outside RTH. (A last-trade-including-extended-hours display is a later option.)
+
+## Timestamps and ordering
+
+- Every event carries `EventTime { ns, ms }` (see [domain-model.md](domain-model.md#timestamps)).
+- The deterministic ordering key for trades is `(time.ns, ingestSeq)`.
+- Bucket assignment uses `time.ms`. That's exact, because every canonical boundary is a whole second.
+
+## Precedence and keys
+
+1. Bars are keyed by `(instrumentId, sessionMode, timeframe, start)`, and every write is an upsert, so duplicates are harmless.
+2. For a 1m key: `revised` (higher `revision`) > `final` > provisional-from-provider > provisional-from-trades. Provisional never overwrites final.
+3. A canonical candle is `final` only when its bucket end has passed **and** every contained minute (or base bar) with data is final.
+
+## Historical → live handoff
+
+When the chart opens (or after a timeframe, symbol or session-mode switch, or a resync):
+
+1. Open or confirm the WS subscription, and **buffer** incoming `market` events.
+2. `GET /bars?timeframe=<tf>&session=regular` (latest page of canonical candles).
+3. For timeframes above 1m, also fetch the **1m bars of the current canonical bucket**: up to 60 for 1h, and the session's regular minutes so far (≤ 390) for 1d. This seeds the live aggregator.
+4. Merge buffered `bar` events (upsert rules), then buffered `trade` events whose minute isn't already final.
+5. Drain the buffer and go live.
+
+On `resync(market)`, steps 2–5 re-run for just the tail. Loaded older history is kept.
+
+## Live aggregation (in `@fume/core`, pure and deterministic)
+
+**State:** `minutes`, a map of 1m `start` → `{ official?: Bar; fromTrades?: Bar }` for the current canonical bucket, plus a small retained window of recent buckets for late corrections.
+
+**Applying a trade** (O(1)):
+
+1. Drop the trade if it's outside the selected session windows.
+2. De-duplicate on `(venue, tradeId)` (bounded LRU, about 10k entries). Trades without an id aren't de-duplicated (documented limitation).
+3. If its minute already has an `official` bar, ignore it. The provider sends `revised` if it mattered.
+4. Otherwise update `minutes[m].fromTrades`. `open`/`close` come from the earliest/latest trade by `(time.ns, ingestSeq)`; `high`/`low` are max/min; `volume` and `tradeCount` accumulate. **Out-of-order trades give identical results.**
+5. Re-fold the active canonical candle (per minute: `official ?? fromTrades`) and schedule one chart update per animation frame.
+
+**Rollover:** the first event in a later canonical bucket opens a new active candle. The previous one stays addressable by key for late corrections (`chart.upsertBars`). Nothing is created for empty buckets in between. For 1h, the rollover at 15:30 opens the short 15:30–16:00 candle, and 16:00 ends it.
+
+**Late and early events:**
+
+- A trade for a non-final minute updates that minute.
+- A trade ahead of the current bucket starts that bucket.
+- A trade older than the retained window is dropped and counted in diagnostics.
+
+## Required tests (Stage 3)
+
+- Canonical bucket function:
+  - every 1h RTH bucket, including the short 15:30–16:00;
+  - an early-close day (12:30–13:00 short);
+  - a DST spring-forward and fall-back day in `America/New_York`;
+  - a futures-style session crossing midnight with a scheduled break;
+  - extended mode (per-window anchoring).
+- Base-interval selection: 15m nests into 1h RTH; a non-nesting base is rejected; a straddling base bar raises an error.
+- Canonical history from 15m base = from 1m base (property test over a synthetic day).
+- Regular mode drops extended-hours trades and base bars.
+- Out-of-order trades give identical OHLCV; exact-`ns` ties are broken by `ingestSeq`; ns comparison works beyond 2^53.
+- Duplicate trades.
+- The active 5m/15m/1h/1d candle changes on **every** trade.
+- Final replaces trade-built; revised replaces final; a late trade after final is ignored.
+- Rollover for every timeframe; an empty minute (no bar, visible gap).
+- Historical/live merge with overlapping buffered data.
+- Replay determinism (same tape → byte-identical output).
