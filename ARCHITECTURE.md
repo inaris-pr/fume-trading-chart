@@ -291,6 +291,32 @@ Consequences:
 
 Stages 1–4 need no DO in either case.
 
+**OWNER DECISION (2026-09-30): GO — Durable Objects approved as the shared real-time hub
+primitive.** This approves the hub _primitive_, not the permanent topology, which waits for the
+futures-provider / multi-provider checkpoint (one DO with several provider upstreams vs
+provider-scoped DOs/hubs is **not decided**).
+
+Evidence (S3, [research.md](docs/research.md)): one Alpaca upstream served multiple downstream
+clients; Run B stayed live beyond 15 minutes while a downstream client was connected; natural
+reconstruction and a redeploy each released the Alpaca slot cleanly; no 406 race observed; forced
+upstream recovery ~1.1 s; the ~60 s no-client upstream close worked; measured single-hub usage
+fits the Free-plan duration allowance for the tested patterns.
+
+**Required permanent-design constraints:**
+
+1. Durable Object in-memory state is disposable.
+2. Reconstruction must be expected (eviction ~15 min after the last request with only an
+   outbound socket; hibernation shortly after going idle; every deploy).
+3. State needed across reconstruction must be persisted or recoverable.
+4. After every upstream reconnect or reconstruction: re-authenticate, re-subscribe, perform a
+   bounded recent-history resync, and reconcile with official bars.
+5. Streamed trades are best-effort / provisional.
+6. Official bars remain authoritative for reconciliation.
+7. Keep the ~60 s last-client idle close unless later evidence justifies changing it.
+8. `406` means the provider slot is still occupied: bounded backoff, never a tight retry loop.
+9. The two observed minute-count shortfalls (S3) remain unresolved and belong to S4.
+10. Their cause is **not** known and must not be described as known.
+
 ### 6.1 Multi-provider streaming (planning note, 2026-09-30; not implemented)
 
 Fume will stream from **more than one provider**: Alpaca IEX for US equities/ETFs, and later a futures-capable provider for GC, SI, CL, NQ and YM. The design above describes the Alpaca case only; the permanent Stage 5 design must not hard-code "one hub = one Alpaca socket". It must allow **provider-scoped upstream connections**, potentially simultaneous, for example:

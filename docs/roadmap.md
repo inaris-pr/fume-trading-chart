@@ -67,16 +67,16 @@ Every stage also requires: `pnpm typecheck`, `pnpm test` and `pnpm format:check`
 
 **Stage 5 sequence (owner decision 2026-09-30).** Fume must support **multiple market-data providers**: Alpaca for US equities/ETFs now, and later a separate futures-capable provider for **GC, SI, CL, NQ, YM** (see "Multi-provider / futures direction" below). Stage 5 must not become architecturally tied to Alpaca as the only real-time provider, so the permanent streaming work is gated:
 
-| Step | Work                                                                                                 | Status                           |
-| ---- | ---------------------------------------------------------------------------------------------------- | -------------------------------- |
-| A    | S2: Alpaca connection-limit spike                                                                    | ✅ done 2026-09-30 (research.md) |
-| B    | S3: Durable Object lifecycle / outbound-WebSocket / cost gate                                        | next                             |
-| C    | Owner decision: Durable Object StreamHub vs single-tab fallback                                      |                                  |
-| D    | **Futures-provider + multi-provider streaming architecture checkpoint** (research + design, no code) |                                  |
-| E    | Owner approval of the checkpoint design                                                              |                                  |
-| F    | Permanent real-time streaming implementation (Alpaca adapter behind the provider-neutral design)     |                                  |
-| G    | S4: provisional trade-built minute vs official minute bar observation                                |                                  |
-| H    | S7: Cloudflare Access + WebSocket-upgrade preview validation, as appropriate                         |                                  |
+| Step | Work                                                                                                 | Status                                    |
+| ---- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| A    | S2: Alpaca connection-limit spike                                                                    | ✅ done 2026-09-30 (research.md)          |
+| B    | S3: Durable Object lifecycle / outbound-WebSocket / cost gate                                        | ✅ done 2026-09-30 (research.md)          |
+| C    | Owner decision: Durable Object StreamHub vs single-tab fallback                                      | ✅ GO: DO hub primitive (ARCHITECTURE §6) |
+| D    | **Futures-provider + multi-provider streaming architecture checkpoint** (research + design, no code) | next (awaiting owner approval to start)   |
+| E    | Owner approval of the checkpoint design                                                              |                                           |
+| F    | Permanent real-time streaming implementation (Alpaca adapter behind the provider-neutral design)     |                                           |
+| G    | S4: provisional trade-built minute vs official minute bar observation                                |                                           |
+| H    | S7: Cloudflare Access + WebSocket-upgrade preview validation, as appropriate                         |                                           |
 
 **After S3 the permanent StreamHub is NOT built immediately**: steps C–E come first. The acceptance criteria below apply to step F onwards.
 

@@ -105,6 +105,131 @@ under live market traffic; limits of the trading (`trade_updates`) stream (out o
 connection keeps the slot. Stage 5 needs exactly one upstream holder, or a reconnect loop that
 treats 406 as "slot busy" and retries with backoff until the holder disconnects.
 
+## Spike S3: Durable Object gate (2026-09-30), COMPLETE: owner GO for the DO hub primitive
+
+Owner decision and the required permanent-design constraints are recorded in ARCHITECTURE.md §6.
+The temporary Cloudflare Worker `fume-s3-spike` (and its secrets) was deleted after the run; the
+spike source is kept as non-production evidence in `apps/worker/spikes/s3-durable-object/`.
+
+### S3 documentation check
+
+All rows are **DOCUMENTED** (official Cloudflare docs fetched 2026-09-30); nothing below is
+OBSERVED or MEASURED yet.
+
+| Fact                                                                                                                                                                                                      | Source page                                                  | Effect on earlier assumptions                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Hibernation is only supported when a Durable Object acts as a WebSocket server. **Outbound WebSockets do not hibernate.**"                                                                               | durable-objects/best-practices/websockets                    | verifies the USER-PROVIDED fact (ARCHITECTURE §6)                                                                                                                 |
+| "an open outbound WebSocket connection **prevents eviction for up to 15 minutes**"; lifecycle page: pending I/O and open outbound connections prevent eviction "for up to 15 minutes from when it starts" | best-practices/websockets; concepts/durable-object-lifecycle | **new, material:** an outbound socket alone may not keep the object alive beyond ~15 min; S3 must observe whether inbound frames on that socket count as activity |
+| Non-hibernatable idle objects are evicted after "70-140 seconds of inactivity (no incoming requests or events)"                                                                                           | concepts/durable-object-lifecycle                            | S3 must observe the idle-client and last-client cases                                                                                                             |
+| Duration is billed on "the 128 MB of memory your Durable Object is allocated"; "Calling accept() on a WebSocket in an Object will incur duration charges for the entire time the WebSocket is connected"  | durable-objects/platform/pricing                             | verifies "billable while sockets are open"                                                                                                                        |
+| Workers Free: 100,000 requests/day, **13,000 GB-s/day** duration; SQLite-backed Durable Objects only                                                                                                      | platform/pricing                                             | fills the previously unknown Free allowance                                                                                                                       |
+| Workers Paid: 1 million requests/month + $0.15/million; **400,000 GB-s/month** + $12.50/million GB-s                                                                                                      | platform/pricing                                             | fills the previously unknown overage price                                                                                                                        |
+| Incoming WebSocket messages are billed as requests at a **20:1** ratio; outgoing messages and incoming protocol pings are free                                                                            | platform/pricing                                             | S3 cost model input                                                                                                                                               |
+| CPU: 30 s per request/event by default (configurable to 5 min); "Each incoming HTTP request or WebSocket message resets the remaining available CPU time"; received WebSocket messages up to 32 MiB       | platform/limits; workers/runtime-apis/websockets             | no blocker expected for SPY trade volume                                                                                                                          |
+| Outbound client: `fetch(url, { headers: { Upgrade: "websocket" } })` then `resp.webSocket.accept()`, or `new WebSocket(url)`; text frames arrive as strings, binary as Blob/ArrayBuffer (`binaryType`)    | workers/runtime-apis/websockets                              | S3 records which frame types Alpaca actually sends                                                                                                                |
+| Config: `durable_objects.bindings` + `migrations: [{ tag, new_sqlite_classes }]`                                                                                                                          | durable-objects/reference/durable-objects-migrations         | used for the S3 spike config                                                                                                                                      |
+
+**OBSERVED locally (wrangler dev / workerd, 2026-09-30 07:1x ET, pre-market so no trades):**
+isolated spike `apps/worker/spikes/s3-durable-object/` (not Stage 4 code). The DO instantiated;
+the outbound `fetch(Upgrade: websocket)` to `v2/iex` authenticated and subscribed; upstream live
+642 and 697 ms after the first client; two clients shared **one** upstream (1 connect); a client
+leaving did not affect the other; a client returning inside the 60 s idle window cancelled the
+close; after 60 s without clients the upstream closed; reconnect after that got a fresh slot (no
+406); a forced upstream loss recovered to live in 1,558 ms (1 s backoff) and clients received
+`resync`. Frames: 9 text, 0 binary (control messages only). Every upstream close, including our
+own `close(1000)`/`close(4000)`, was reported to the DO as code 1006 (matches S2 on Node).
+
+**OBSERVED on Cloudflare (deployed temporary Worker `fume-s3-spike`, 2026-09-30):**
+
+- 07:35 ET functional run: upstream live 927/937 ms after the first client; two clients shared
+  one upstream; idle close fired exactly 60.0 s after the last client left (upstream reported
+  `1006 "WebSocket disconnected without sending Close frame."`); forced loss recovered to live in
+  1,105 ms, no 406.
+- **Reconstruction:** after the idle close (no sockets, no timers left), the object was
+  reconstructed within ~10 s (constructor #2 → #3, new instance id, in-memory counters lost). This
+  matches the documented hibernation of idle objects. **A permanent hub cannot assume ordinary
+  in-memory state survives reconstruction.**
+- Cloudflare's tail labels ended downstream WebSocket requests "Exception Thrown"; the JSON event
+  shows outcome `responseStreamDisconnected` with **no exceptions** (normal client disconnect).
+- 08:07–08:13 ET pre-market watch: DO constructor #4, upstream authenticated + subscribed, one
+  connect, 0 disconnects, 0 406, 299 per-second downstream summaries, **0 SPY trades**, 3 text / 0
+  binary frames (control only). Alpaca's official IEX 1Min bars also show **0 SPY trades since
+  04:00 ET** that morning, so the stream matched the official record (no missing events). Not
+  representative of regular-session behavior.
+
+### S3 regular-session results (deployed `fume-s3-spike`, 2026-09-30)
+
+Isolated spike `apps/worker/spikes/s3-durable-object/` (one DO, one outbound `v2/iex` socket,
+SPY trades; downstream clients get per-second COUNTS only). Trades were counted by trade
+timestamp and compared with the `n` of Alpaca's official IEX 1Min bars.
+
+**Run A: hold mode, no clients, no requests after the start (09:27:23 → read at 10:05 ET).**
+
+- OBSERVED: live 136 ms after connect; trades flowed from the 09:30 open (26–97 per minute, all
+  text frames, 0 binary). Delivery **stopped at ~09:42:01 ET**: the object was evicted **~14 m 38 s
+  after the only request**; no close handler ran; the next request met a new instance.
+- OBSERVED: **inbound upstream frames do NOT count as activity** for eviction: with only an
+  outbound socket, the documented "up to 15 minutes" applied.
+- OBSERVED: the replacement instance reconnected on the first attempt: **no 406** (eviction
+  released the Alpaca slot).
+- OBSERVED (completeness): 11/12 minutes identical to the official count; the 09:30 opening
+  minute streamed 61 vs official 70 (−9); 724 vs 733 total.
+- MEASURED: the 13:30–13:45 UTC bucket shows `activeTime` 725.5 s (to ~13:42:05), matching.
+
+**Redeploy while the socket was held (10:07 ET).** OBSERVED: the deploy tore down the holding
+instance; the next request created a new one that authenticated and subscribed on the first
+attempt, **no 406**, trades resumed within seconds.
+
+**Run B: one client W connected throughout (10:08:31 → 10:44:43 ET, ~36 min).**
+
+- OBSERVED: **one instance for the whole run, no reconstruction; delivery continued past 15 min**
+  (minutes 16–35 normal). An open downstream (accepted) WebSocket request keeps the object alive.
+- OBSERVED: 1,512 trades, 1,241 text frames, **0 binary**, 0 decode errors, 0 duplicate trade
+  ids, 0 406.
+- OBSERVED (sharing): client X joined at minute 20 and left at 22; W and X received identical
+  counts (86 and 58), one upstream connection throughout; W unaffected when X left.
+- OBSERVED (forced loss, spike-only route): upstream closed 14:40:42.857, reconnect 1 s backoff,
+  live 14:40:43.978 (**1.12 s**), one `resync` to W; the 14:40 minute still matched the official
+  count exactly (no trades fell in the outage).
+- OBSERVED (completeness): 34/35 minutes identical; 14:38 streamed 73 vs official 78 (−5) with
+  no disconnect nearby; 1,506 vs 1,511 total. Streamed was **never higher** than official.
+- OBSERVED (idle close): last client left 14:43:43.2; upstream closed on purpose at 14:44:43.2
+  (60.0 s); the idle object was reconstructed within ~15 s, and again within ~40 s later.
+
+**Other observations.** Every upstream close (ours or forced) surfaced as code 1006 "WebSocket
+disconnected without sending Close frame." Tail shows ended downstream requests as "Exception
+Thrown"; the JSON event is `responseStreamDisconnected` with no exception. The invocations
+dataset counted 8 errors among 50 DO requests (not attributed; likely those disconnect
+outcomes). **Consequence: a permanent hub cannot keep ordinary in-memory state across
+reconstruction** (eviction after ~15 min without requests, hibernation ~10–40 s after going
+idle, and every deploy).
+
+**Unexplained (for S4):** the two shortfalls (−9 at the open, −5 at 14:38) vs the official bar
+counts. Not duplicates; possibly trades included in bars but not sent on the trade stream.
+
+**MEASURED (Cloudflare GraphQL Analytics, read-only, 2026-09-30):** `duration` = active seconds ×
+0.128 GB (e.g. 900.0 s → 115.2 GB-s per fully active 15 min, i.e. **460.8 GB-s per hour** for one
+open hub); inbound upstream Alpaca frames are counted as `inboundWebsocketMsgCount` (526 in Run
+A's bucket vs ~535 frames seen); CPU ~0.13 s per 15 min; the whole day's spike used **~485 GB-s**
+and 50 DO requests.
+
+**CALCULATED (measured 460.8 GB-s/h × documented allowances; one hub, SPY only):**
+
+| Hub open              | GB-s/day | GB-s/30 days | Free (13,000 GB-s/day) | Paid (400,000 GB-s/month incl.) |
+| --------------------- | -------- | ------------ | ---------------------- | ------------------------------- |
+| 6.5 h/day (RTH)       | ~2,995   | ~89,856      | fits (~23%)            | fits, no duration overage       |
+| 16 h/day (incl. ext.) | ~7,373   | ~221,184     | fits (~57%)            | fits, no duration overage       |
+
+Requests: observed SPY upstream frames 33–44/min → ~12.9k–17.0k frames per 6.5 h → **~645–850
+billable requests/day** at 20:1 (Free 100,000/day; Paid 1 M/month incl.). Each additional
+subscribed symbol adds its own frames; downstream clients add their own requests.
+
+**CALCULATED from the documented numbers only (not measured, superseded by the table above):** one object held active
+continuously uses 0.125 GB × 3,600 s = 450 GB-s per hour, so 6.5 h/day ≈ 2,925 GB-s/day
+(Free allowance 13,000/day) and 16 h/day ≈ 7,200 GB-s/day. For 30 days: ≈ 87,750 and
+≈ 216,000 GB-s/month (Paid includes 400,000). This assumes one object and the documented 128 MB
+billing basis; S3 must confirm actual metrics.
+
 ## Alpaca: trading
 
 | Fact                                                                                                                                                                                                                                      | Status                                                                      |

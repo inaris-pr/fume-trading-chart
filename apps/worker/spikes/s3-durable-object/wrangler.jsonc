@@ -1,0 +1,21 @@
+// SPIKE S3 ONLY (temporary, not Fume production, not the Stage 5 design).
+// One Durable Object that owns one outbound Alpaca IEX WebSocket, for lifecycle/cost evidence.
+// Secrets (ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY, S3_TOKEN) are NEVER placed here:
+// locally they come from apps/worker/.dev.vars via --env-file; remotely via `wrangler secret`.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "fume-s3-spike",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "send_metrics": false,
+  "observability": { "enabled": false },
+  "vars": {
+    "SPIKE_IDLE_CLOSE_MS": "60000",
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "S3Hub" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["S3Hub"] }],
+}
