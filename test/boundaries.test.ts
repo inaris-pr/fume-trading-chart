@@ -113,36 +113,47 @@ describe('dependency tree', () => {
   });
 });
 
-describe('Stages 2-3 stay offline and provider-neutral', () => {
-  const dirs = ['packages/core/src', 'packages/chart/src', 'packages/replay/src', 'apps/web/src'];
-  const forbidden = [
+// Comments are stripped: doc comments legitimately name Alpaca as an example provider.
+const code = (file: string) =>
+  read(file)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+describe('core, chart, replay and web stay provider-neutral (Stages 2-4)', () => {
+  const providerSpecific = [
     /alpaca/i,
     /\bAPCA\b/,
-    /\bfetch\s*\(/,
-    /new\s+WebSocket\s*\(/,
-    /\bXMLHttpRequest\b/,
-    /\bEventSource\b/,
     /['"`](?:https?|wss?):\/\//,
     /wrangler/i,
     /from\s+['"]cloudflare:/,
     /\bDurableObject\b/,
     /\bsecret\s*key\b/i,
   ];
+  const network = [/\bfetch\s*\(/, /new\s+WebSocket\s*\(/, /\bXMLHttpRequest\b/, /\bEventSource\b/];
 
-  // Comments are stripped: Stage 0 doc comments legitimately name Alpaca as an example provider.
-  const code = (file: string) =>
-    read(file)
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/(^|[^:])\/\/.*$/gm, '$1');
-
-  test('no provider names, network calls, endpoints, credentials or Worker code in core, chart, replay or web', () => {
-    for (const dir of dirs) {
+  test('core, chart and replay: no provider names, network calls, endpoints, credentials or Worker code', () => {
+    for (const dir of ['packages/core/src', 'packages/chart/src', 'packages/replay/src']) {
       for (const file of sourceFiles(join(root, dir))) {
         const source = code(file);
-        for (const pattern of forbidden)
+        for (const pattern of [...providerSpecific, ...network])
           expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
       }
     }
+  });
+
+  test('web: never names a provider or host; the only network call is the relative /api/v1 client', () => {
+    const client = join(root, 'apps/web/src/api/fume-client.ts');
+    for (const file of sourceFiles(join(root, 'apps/web/src'))) {
+      const source = code(file);
+      for (const pattern of providerSpecific)
+        expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+      for (const pattern of network) {
+        if (file === client && pattern.source.includes('fetch')) continue;
+        expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+      }
+      for (const spec of importsOf(read(file))) expect(spec, file).not.toMatch(/worker/);
+    }
+    expect(code(client)).toMatch(/API_BASE = '\/api\/v1'/);
   });
 
   test('ticker and timeframe logic lives in the app shell, not in the chart engine', () => {
@@ -150,6 +161,108 @@ describe('Stages 2-3 stay offline and provider-neutral', () => {
       const code = read(file);
       expect(code, file).not.toMatch(/\b(QQQ|AAPL|NVDA|TSLA)\b/);
       expect(code, file).not.toMatch(/['"](1m|5m|15m|1h|4h|1d)['"]/);
+    }
+  });
+});
+
+describe('Stage 4 Worker boundaries', () => {
+  const workerSrc = join(root, 'apps/worker/src');
+  const alpacaDir = join(workerSrc, 'providers', 'alpaca');
+  const compositionRoot = join(workerSrc, 'index.ts');
+  const files = sourceFiles(workerSrc);
+
+  test('the Worker imports only @fume/core and its own modules (no router framework, no SDKs)', () => {
+    for (const file of files) {
+      for (const spec of importsOf(read(file)))
+        expect(spec, file).toMatch(/^(\.\.?\/|@fume\/core$)/);
+    }
+    const pkg = JSON.parse(read(join(root, 'apps/worker/package.json'))) as Record<
+      string,
+      Record<string, string>
+    >;
+    expect(Object.keys(pkg.dependencies ?? {})).toEqual(['@fume/core']);
+    expect(Object.keys(pkg.devDependencies ?? {})).toEqual(['wrangler']);
+  });
+
+  test('Alpaca specifics live only in providers/alpaca (plus the composition root that wires it)', () => {
+    for (const file of files) {
+      if (file.startsWith(alpacaDir) || file === compositionRoot) continue;
+      const source = code(file);
+      for (const pattern of [
+        /alpaca/i,
+        /\bAPCA\b/i,
+        /['"`]https?:\/\//,
+        /next_page_token|page_token/,
+      ])
+        expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+    }
+  });
+
+  test('only the composition root imports provider adapters', () => {
+    for (const file of files) {
+      if (file === compositionRoot || file.startsWith(alpacaDir)) continue;
+      for (const spec of importsOf(read(file))) expect(spec, file).not.toMatch(/providers\//);
+    }
+  });
+
+  test('core, chart, replay and web never import the Worker', () => {
+    for (const dir of [
+      'packages/core/src',
+      'packages/chart/src',
+      'packages/replay/src',
+      'apps/web/src',
+    ]) {
+      for (const file of sourceFiles(join(root, dir))) {
+        for (const spec of importsOf(read(file)))
+          expect(spec, file).not.toMatch(/@fume\/worker|apps\/worker/);
+      }
+    }
+  });
+
+  test('Stage 4 scope: no WebSocket, Durable Object, storage or trading code in the Worker', () => {
+    for (const file of files) {
+      const source = code(file);
+      for (const pattern of [
+        /WebSocket/,
+        /DurableObject/,
+        /\bKVNamespace\b|\bD1Database\b|\bR2Bucket\b/,
+        /\/v2\/orders|\/v2\/positions|\/v2\/account|submitOrder|cancelOrder/,
+      ])
+        expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+    }
+  });
+
+  test('wrangler.jsonc: local only, no secrets, no bindings for storage or Durable Objects', () => {
+    const config = read(join(root, 'apps/worker/wrangler.jsonc'));
+    expect(config).toMatch(/"workers_dev":\s*false/);
+    expect(config).toMatch(/"preview_urls":\s*false/);
+    expect(config).not.toMatch(/ALPACA_API_KEY_ID"\s*:|ALPACA_API_SECRET_KEY"\s*:/);
+    expect(config).not.toMatch(
+      /durable_objects|kv_namespaces|d1_databases|r2_buckets|"routes"|"route"/,
+    );
+    expect(config).toMatch(/"ALPACA_DATA_FEED":\s*"iex"/);
+    expect(config).toMatch(/"ALPACA_TRADING_BASE_URL":\s*"https:\/\/paper-api\.alpaca\.markets"/);
+  });
+
+  test('.dev.vars is gitignored and its example holds empty values only', () => {
+    const ignore = read(join(root, '.gitignore'));
+    expect(ignore).toMatch(/^\.dev\.vars$/m);
+    const example = read(join(root, 'apps/worker/.dev.vars.example'));
+    for (const line of example.split('\n').filter((l) => /^[A-Z_]+=/.test(l))) {
+      expect(line, 'example values must be empty').toMatch(/^[A-Z_]+=$/);
+    }
+  });
+
+  test('recorded fixtures contain no credentials or auth headers', () => {
+    const dir = join(root, 'apps/worker/test/fixtures');
+    const fixtureFiles = readdirSync(dir, { recursive: true, withFileTypes: true })
+      .filter((d) => d.isFile())
+      .map((d) => join(d.parentPath, d.name));
+    for (const file of fixtureFiles) {
+      const text = read(file);
+      expect(text, file).not.toMatch(/APCA-API|apca-api|Authorization|secret|key_id|keyId/i);
+      expect(text, file).not.toMatch(/\bPK[A-Z0-9]{16,}\b|\bAK[A-Z0-9]{16,}\b/);
+      expect(text, file).not.toMatch(/account_number|account_id/);
     }
   });
 });

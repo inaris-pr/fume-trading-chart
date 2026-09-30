@@ -1,0 +1,19 @@
+// Fume Worker, Stage 4: LOCAL DEVELOPMENT ONLY. Do not deploy (no routes, workers.dev and
+// preview URLs disabled). Secrets are NOT configured here: ALPACA_API_KEY_ID and
+// ALPACA_API_SECRET_KEY come from apps/worker/.dev.vars (gitignored) during `wrangler dev`.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fume-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "send_metrics": false,
+  "vars": {
+    "FUME_ENV": "local",
+    "ALPACA_DATA_BASE_URL": "https://data.alpaca.markets",
+    "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
+    "ALPACA_DATA_FEED": "iex",
+    "FUME_ALLOWED_ORIGINS": "http://localhost:5173",
+  },
+}

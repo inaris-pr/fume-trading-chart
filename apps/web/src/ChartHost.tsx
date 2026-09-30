@@ -1,28 +1,51 @@
 import { useEffect, useRef, useState } from 'react';
-import { FumeChart, type FollowingLatestState } from '@fume/chart';
+import { FumeChart, type FollowingLatestState, type OlderDataRequest } from '@fume/chart';
 import type { MarketDataProvider, TimeframeId } from '@fume/core';
 import { LiveChartController } from './live/chart-controller.ts';
+import {
+  HistoricalChartController,
+  type HistoryClient,
+  type HistoryStatus,
+} from './history/historical-controller.ts';
+
+/**
+ * Where candles come from:
+ * - replay: the deterministic in-browser replay provider (live ticks, Stage 3);
+ * - api: canonical history from Fume's backend over HTTP (Stage 4; no live ticks).
+ */
+export type ChartSource =
+  { kind: 'replay'; provider: MarketDataProvider } | { kind: 'api'; client: HistoryClient };
+
+/** What ChartHost needs from either controller. */
+interface ChartController {
+  select(symbol: string, timeframe: TimeframeId): Promise<void>;
+  setTimeframe(timeframe: TimeframeId): Promise<void>;
+  requestOlderData(request: OlderDataRequest): Promise<void>;
+  dispose(): void;
+}
 
 export interface ChartHostProps {
-  provider: MarketDataProvider;
+  source: ChartSource;
   symbol: string;
   timeframe: TimeframeId;
+  /** History status (api source only). */
+  onStatus?: (status: HistoryStatus) => void;
 }
 
 /**
- * Hosts the framework-independent FumeChart and the framework-free LiveChartController. React only
- * provides the container, creates/destroys both, and forwards symbol/timeframe selections. Candle
- * math, live updates, zoom, pan, crosshair and rendering never go through React state.
+ * Hosts the framework-independent FumeChart and a framework-free controller. React only provides
+ * the container, creates/destroys both, and forwards symbol/timeframe selections. Candle math,
+ * live updates, zoom, pan, crosshair and rendering never go through React state.
  */
-export function ChartHost({ provider, symbol, timeframe }: ChartHostProps) {
+export function ChartHost({ source, symbol, timeframe, onStatus }: ChartHostProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const controllerRef = useRef<LiveChartController | null>(null);
+  const controllerRef = useRef<ChartController | null>(null);
   const chartRef = useRef<FumeChart | null>(null);
   // Only changes when the live-follow state or the plot corner moves (rare), not per frame.
   const [follow, setFollow] = useState<FollowingLatestState | null>(null);
   const shownRef = useRef<{ symbol: string; timeframe: TimeframeId } | null>(null);
-  const latest = useRef({ symbol, timeframe });
-  latest.current = { symbol, timeframe };
+  const latest = useRef({ symbol, timeframe, onStatus });
+  latest.current = { symbol, timeframe, onStatus };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -34,7 +57,14 @@ export function ChartHost({ provider, symbol, timeframe }: ChartHostProps) {
       formatTime: () => '',
       minPriceStep: 0.01,
     });
-    const controller = new LiveChartController({ provider, chart });
+    const controller: ChartController =
+      source.kind === 'replay'
+        ? new LiveChartController({ provider: source.provider, chart })
+        : new HistoricalChartController({
+            client: source.client,
+            chart,
+            onStatus: (status) => latest.current.onStatus?.(status),
+          });
     chart.setOptions({
       onNeedsOlderData: (request) => void controller.requestOlderData(request),
       onFollowingLatestChange: setFollow,
@@ -55,7 +85,7 @@ export function ChartHost({ provider, symbol, timeframe }: ChartHostProps) {
       shownRef.current = null;
       setFollow(null);
     };
-  }, [provider]);
+  }, [source]);
 
   useEffect(() => {
     const controller = controllerRef.current;

@@ -56,7 +56,7 @@ Candle fields: `open` = first, `close` = last, `high`/`low` = max/min, `volume` 
 3. Base bars outside the selected windows are dropped (e.g. extended-hours bars in regular mode). Base bars are then folded into canonical buckets with the rules above.
 4. **A base bar that would straddle a canonical boundary is a configuration error.** It's rejected loudly, never silently split or assigned.
 
-**Expected choice for Alpaca IEX, regular mode** (pending S1):
+**Choice for Alpaca IEX, regular mode** (native `[1, 5, 15]` verified by S1 on 2026-09-29, see [research.md](research.md#spike-s1-results-2026-09-29)):
 
 | Timeframe | Base    | Why                                                                                                                                                                                                                     |
 | --------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -66,9 +66,11 @@ Candle fields: `open` = first, `close` = last, `high`/`low` = max/min, `volume` 
 | 1h        | `15Min` | session-aligned hours (09:30, 10:30, …, 15:30, 16:00) are all 15-minute boundaries; Alpaca's native `1Hour` isn't used                                                                                                  |
 | 1d        | `15Min` | the RTH daily candle = fold of the session's regular-window 15m bars. Alpaca's `1Day` isn't used, because its session definition (extended-hours inclusion) is unverified and would break the "regular by default" rule |
 
-Cost check against the Basic 200 requests/min limit: 500 hourly candles ≈ 72 sessions ≈ 1,900 15m base bars, which is **one** provider request (limit 10,000). A year of daily candles is ≈ 6,500 15m bars, also one request.
+Cost check against the Basic 200 requests/min limit, **as observed** (2026-09-29): despite `limit=10000`, Alpaca returned IEX `15Min` pages of about 730–740 bars (roughly one month, including pre/post-market bars) and one month of `1Min` in a single 7,925-bar page. Upstream calls therefore scale with the **time span**, not the bar count: 500 hourly candles (72 sessions) took 3 bar pages; 150 daily candles (150 sessions) 6–7 pages. The browser requests 1m 1000 / 5m 800 / 15m 600 / 1h 500 / 4h 150 / 1d 150 candles per page to stay at 1–7 upstream calls per request; the Worker caps one base-bar fetch at 10 pages.
 
-If S1 shows Alpaca's 5m/15m bars aren't epoch-aligned or start-labeled, the adapter declares `[1]` only. Candles stay identical; only cost rises (1h = 390 base bars per session).
+Had S1 failed, the adapter would declare `[1]` only (candles identical, higher cost). It passed, so `[1, 5, 15]` is declared (`ALPACA_NATIVE_INTERVALS`).
+
+**Extended-hours base bars.** IEX `15Min`/`1Min` history includes pre/post-market bars inside the requested time range (observed: 15Min bars from 08:00 to 16:15 ET). They are dropped by the regular-mode canonical fold and counted (`droppedOutsideSession`). The base-bar limit is therefore sized on the wall-clock span, not on regular minutes, and a truncated fetch never produces a partial candle (the oldest incomplete buckets are omitted).
 
 **Consistency check (S1):** for one full day, canonical candles built from `15Min` base bars must equal those built from `1Min` base bars (OHLC exact, volume exact). This proves the base-interval choice doesn't change results.
 
@@ -101,6 +103,15 @@ Implemented and tested with the deterministic replay provider (`@fume/replay`); 
 **Retention policy.** Minute state is kept for 2 × 1440 minute slots behind the newest event (two full days of 24-hour sessions; about 7 RTH sessions). Older minutes are pruned in batches, and the covered range moves forward with them. A correction (final/revised bar) or trade for a minute that is older than the retained/seeded coverage is **dropped and counted** (`eventsOutsideRetention`); a canonical bucket that starts before the coverage is **not re-folded** (`uncoveredBuckets`), because its earlier minutes are unknown. Nothing is guessed. The host seeds the aggregator with official minutes from at least the start of the previous session, which covers every bucket up to 1D.
 
 **Trade identity.** Trades are de-duplicated by `venue + tradeId` in a bounded set of the 10,000 most recent identities. Trades without an id cannot be de-duplicated; a redelivered id-less trade is counted twice (documented limitation).
+
+## Implementation status (Stage 4, historical)
+
+- `packages/core/src/history.ts`: `nestsExactly`, `selectBaseInterval`, `canonicalBucketEnd`, `canonicalSlotsBefore`, `buildCanonicalBars` (shared TimeScaleMapping + `aggregateBars`, plus the ended-and-final status rule).
+- `apps/worker/src/canonical-history.ts`: page planning (sessions → base interval → one ranged fetch → canonical → newest `limit`).
+- `apps/worker/src/providers/alpaca/`: base bars from the single-symbol endpoint with explicit `feed=iex`, `adjustment=raw`, `sort=desc`, an explicit `start` (never the upstream default), and one helper for Fume's exclusive `end` (Alpaca's `end` is inclusive: `end − 1 ms`, and results are also filtered to `start < end`).
+- Verified on real data (2026-09-29): Worker candles for the completed session equal the fold of the raw recorded `1Min` fixture for all six timeframes (OHLC, volume, trade count; 0 mismatches). 1h starts 09:30…15:30 (short last), 4h 09:30/13:30, 1d one candle. The 2025-11-28 early close gives 1h 09:30…12:30 (12:30–13:00 short) and one 4h candle 09:30–13:00.
+- **Observed IEX history gap:** Alpaca IEX returned **no bars at all** for 2025-03-10 (SPY and TSLA; the SIP feed has data, and the calendar lists a normal session). Fume shows an empty session; nothing is fabricated.
+- **Not observed yet:** an in-progress bucket with real data (all QA ran after the close). The status rule is covered by tests.
 
 ## Timestamps and ordering
 

@@ -1,3 +1,8 @@
 packages:
   - 'packages/*'
   - 'apps/*'
+
+# Packages whose install scripts may run (native binaries needed by `wrangler dev`).
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
