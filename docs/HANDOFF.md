@@ -7,8 +7,16 @@
 Status: **S2 COMPLETE · S3 COMPLETE · Owner DO decision: GO — Durable Object hub primitive approved ·
 permanent streaming NOT IMPLEMENTED**
 
-- The GO approves the DO hub **primitive** only. The permanent topology (one DO with several
-  provider upstreams vs provider-scoped DOs/hubs) is decided at the futures-provider checkpoint.
+**Futures/multi-provider checkpoint: RESEARCH APPROVED (2026-09-30).** Owner direction:
+**Databento is the PREFERRED futures provider, conditional on written confirmation** that the
+private single-user Cloudflare Durable Object backend is covered by Standard personal CME licensing
+($199/month, CME personal licensing included, up to 2 devices). **Massive is the fallback**
+(needs its own written server-side-use approval). No provider is locked into the architecture; no
+account, subscription, API key or futures code exists. Details:
+[research.md](research.md#futures-provider--multi-provider-checkpoint-research-2026-09-30-corrected-same-day-databento-preferred-pending-licensing-confirmation).
+
+- The GO approves the DO hub **primitive** only. Preferred permanent topology after the futures
+  checkpoint: **provider/feed-scoped DO hubs** (one hub per provider feed); not implemented.
 - Required permanent-design constraints (disposable in-memory state, expected reconstruction,
   resync + reconciliation after every reconnect, official bars authoritative, ~60 s idle close,
   406 = bounded backoff, S4 shortfalls unresolved): ARCHITECTURE.md §6.
@@ -43,8 +51,8 @@ C. owner DO vs single-tab decision ✅ (GO: DO) → D. **futures-provider + mult
 checkpoint** → E. owner approval → F. permanent streaming implementation → G. S4 → H. S7.
 Reason: Fume will support multiple market-data providers: Alpaca for equities/ETFs and, later, a
 futures provider for **GC, SI, CL, NQ, YM** (actual futures, not ETF proxies such as
-GLD/SLV/USO/QQQ/DIA). No futures provider has been chosen and nothing futures-related is
-implemented. See roadmap "Multi-provider / futures direction" and ARCHITECTURE §6.1. Later in Stage 5: **S4** (provisional
+GLD/SLV/USO/QQQ/DIA). Databento is preferred pending licensing confirmation (Massive fallback);
+no provider is locked in and nothing futures-related is implemented. See roadmap "Multi-provider / futures direction" and ARCHITECTURE §6.1. Later in Stage 5: **S4** (provisional
 IEX trade-built minute vs the official minute bar) and **S7** (Cloudflare Access including
 WebSocket upgrades, JWT verification in the Worker).
 

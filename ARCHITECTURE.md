@@ -293,8 +293,10 @@ Stages 1–4 need no DO in either case.
 
 **OWNER DECISION (2026-09-30): GO — Durable Objects approved as the shared real-time hub
 primitive.** This approves the hub _primitive_, not the permanent topology, which waits for the
-futures-provider / multi-provider checkpoint (one DO with several provider upstreams vs
-provider-scoped DOs/hubs is **not decided**).
+futures-provider / multi-provider checkpoint. **Checkpoint outcome (2026-09-30):** the preferred
+topology is **provider/feed-scoped DO hubs** (one hub per provider feed, each owning its own
+upstream, subscriptions, limits, reconstruction and resync); it is not implemented and is confirmed
+when permanent streaming is approved (§6.1).
 
 Evidence (S3, [research.md](docs/research.md)): one Alpaca upstream served multiple downstream
 clients; Run B stayed live beyond 15 minutes while a downstream client was connected; natural
@@ -330,7 +332,7 @@ StreamHub (or one hub per provider, if that proves cleaner)
 - Subscriptions route to the upstream that owns the instrument (`Instrument.marketDataRef.providerId`); each upstream keeps its own reference-counted subscription set, reconnect/backoff, stale detection and `resync`.
 - Browser frames stay provider-neutral (`MarketEvent`); a client may hold instruments from different providers at once.
 - Stage 4 pieces that are single-provider today and will need design at the checkpoint (not changed now): the Worker router takes one `HistoricalMarketDataProvider`; `/api/v1` accepts only `eq:` instrument ids; `/instruments/resolve` treats a symbol as an equity ticker (a futures root such as `NQ` resolves to a contract, not a ticker).
-- Whether hubs are Durable Objects at all is decided by S3; the multi-provider shape is decided at the futures-provider checkpoint (roadmap, Stage 5 steps C–E).
+- S3 approved Durable Objects as the hub primitive. The futures-provider checkpoint (2026-09-30) prefers **one hub per provider feed** (e.g. `alpaca/iex` and `futures/<provider>`); the browser receives an opaque stream key, never a provider name or host. **No futures provider is locked into this architecture**; the provider preference and its licensing condition are recorded in [research.md](docs/research.md) and [HANDOFF.md](docs/HANDOFF.md).
 
 ## 7. Decision: database (**NO**)
 
@@ -346,6 +348,22 @@ We'd reconsider only for a real requirement: an app-owned audit log of submitted
 ## 8. Futures readiness
 
 The core model already carries what futures need (`packages/core/src/instrument.ts`): tick rules, fractional price formats, a contract multiplier, a session spec whose windows can cross midnight, a session date that belongs to the _ending_ day, a `future` block (root, contract month, expiration, tick value), and separate market-data and brokerage provider refs. A futures provider plugs in as another `MarketDataProvider` / `BrokerageProvider` pair.
+
+**Provider-neutral futures conclusions (checkpoint research 2026-09-30; no provider locked in):**
+
+- The five target roots are verified CME Group products on four DCMs: GC and SI (COMEX), CL
+  (NYMEX), NQ (CME), YM (CBOT). A futures feed therefore needs entitlements on all four.
+- The existing session model is sufficient: CME Globex trades Sunday 18:00 ET to Friday 17:00 ET
+  with a daily 17:00–18:00 ET break, and the trading day is the day the session ends, which
+  `MarketSession` windows and `sessionDate` already express. Holidays and early closes need a
+  schedule source (provider schedule API or CME calendar).
+- Neither CME nor the reviewed vendors publish exchange-official 1-minute bars; futures bars are
+  provider-computed from trades. Reconciliation therefore uses the provider's historical trades/bars.
+- A Fume futures `Instrument` is one specific contract; the root is resolved to a contract by the
+  backend (no hard-coded front month). First-notice dates were not found in the reviewed provider
+  fields, so a CME calendar source is needed for physically delivered contracts.
+- Tick size, tick value, multiplier and currency come from an authoritative metadata source
+  (provider reference data cross-checked with CME specifications), never hard-coded.
 
 **Equity-specific assumptions kept out of chart/core:**
 

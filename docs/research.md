@@ -297,3 +297,336 @@ The first Stage 0 draft described the `APCA-API-*` headers as "legacy" and possi
 2. **The single-connection limit clashes with "browser connects to backend, backend connects to Alpaca" if each browser tab gets its own upstream connection.** A second tab, a refresh race, or local dev running next to a deployed instance would hit error 406. The proposed correction is one shared upstream connection owner. That's the conditional Durable Objects decision in [ARCHITECTURE.md](../ARCHITECTURE.md) §6, which has a single-tab fallback.
 3. **Paper fills are simulated against the NBBO, but the chart shows IEX.** An execution marker can sit outside the visible candle's high/low. That is expected and not a Fume bug.
 4. **Market orders placed outside regular hours are queued, not filled.** The UI must show them as pending.
+
+## Futures-provider + multi-provider checkpoint (research 2026-09-30, corrected same day; Databento preferred pending licensing confirmation)
+
+**OWNER DIRECTION (2026-09-30):** the corrected research is approved. **Databento is the PREFERRED
+futures provider, conditional on written confirmation** that Fume's private single-user Cloudflare
+backend use is permitted under Standard personal CME licensing. **Massive is the fallback** (subject
+to its own written server-side-use approval). Databento is **not** locked into the production
+architecture: no account, no subscription, no API key, no adapter, no code. Provider/feed-scoped
+Durable Object hubs remain the preferred topology (not implemented). Next action: HANDOFF.md.
+
+Research and design only: no provider locked in, no account, no key, no code. Labels: **VERIFIED**
+(official source read on 2026-09-30), **PROVIDER-STATED** (official provider page, not independently
+checked), **THIRD-PARTY** (non-official, flagged), **UNKNOWN** (not answerable from public docs).
+
+**Correction pass (2026-09-30, requested by the owner).** The first version of this section said
+Databento costs "$199 + at least $36.50 CME". That was wrong: it applied the general CME fee
+schedule and a 2023 announcement to Databento's current personal plan. The current official pricing
+and licensing pages (below) show **CME personal licensing included in Standard (up to 2 devices,
+"No license fees")**. Massive's section was also corrected: its terms disclose **no additional CME
+fee** and are explicitly **display-only**. The recommendation changed (see the end of this section).
+
+### Target markets (VERIFIED: CME Group contract specifications, cmegroup.com, 2026-09-30)
+
+| Root | Market            | Venue (DCM, rulebook chapter) | Contract unit    | Tick (outright) | Globex hours (ET)                                    |
+| ---- | ----------------- | ----------------------------- | ---------------- | --------------- | ---------------------------------------------------- |
+| GC   | Gold              | **COMEX** (ch. 113)           | 100 troy oz      | 0.10 = $10.00   | Sun–Fri 18:00–17:00, 60-min break daily from 17:00   |
+| SI   | Silver            | **COMEX** (ch. 112)           | 5,000 troy oz    | 0.005 = $25.00  | same                                                 |
+| CL   | WTI Crude Oil     | **NYMEX** (ch. 200)           | 1,000 barrels    | 0.01 = $10.00   | same (stated as 17:00–16:00 CT)                      |
+| NQ   | E-mini Nasdaq-100 | **CME** (ch. 359)             | $20 × Nasdaq-100 | 0.25 = $5.00    | Sun 18:00 – Fri 17:00, daily maintenance 17:00–18:00 |
+| YM   | E-mini Dow ($5)   | **CBOT** (ch. 27)             | $5 × DJIA        | 1.00 = $5.00    | same                                                 |
+
+Future-compatibility micros (VERIFIED): **MGC** Micro Gold (COMEX ch. 120, 10 oz, $1 tick);
+**SIL** Micro Silver (COMEX ch. 121, 1,000 oz, $5 tick); **MCL** Micro WTI (NYMEX ch. 309, 100 bbl,
+$1 tick); **MNQ** (CME ch. 361, $2 × index, $0.50 tick); **MYM** (CBOT ch. 28, $0.50 × DJIA, $0.50
+tick). Listing/termination differ per product (e.g. GC monthly for 26 consecutive months, trading
+terminates 12:30 CT on the third-last business day; NQ/YM quarterly, terminate 09:30 ET on the 3rd
+Friday; CL terminates 3 business days before the 25th of the prior month). Recorded for
+verification only; Fume must read them from an authoritative metadata source.
+
+### Licensing: two different things
+
+**A. Provider personal-subscriber plans (what a single private Fume user would buy).**
+
+- **Databento Standard** (VERIFIED databento.com/pricing and docs/portal/live-data, 2026 table):
+  $199/month, "**No license fees**"; licensing row "Personal use: **Up to 2 devices · License fees
+  included**", "Instant approval"; Commercial use, real-time/delayed distribution and
+  white-labeling are **not** in Standard (Plus/Unlimited only). The 2026 venue table for CME:
+  "**Personal: Included with Standard plan (up to 2 devices)**"; "Commercial: $973/exchange";
+  "$2,170 distribution + $35.40/personal user or $119.80/commercial user".
+- **Massive Futures Advanced** (VERIFIED massive.com/pricing and legal/market-data-terms-of-service):
+  $199/month, individual, non-pro only. The subscriber certifies CME **Non-Professional** status and
+  enters the **CME Group Subscriber Addendum** with Massive; a CME non-pro may use "a maximum of two
+  Order Routing Devices". **No additional exchange fee is disclosed** in Massive's pricing or terms,
+  so none is assumed.
+
+**B. CME's general fee schedule** (VERIFIED CME Group Fee List effective 2026-01-01, owner-supplied
+PDF; CME Information Policies). Monthly, per DCM: non-pro top of book $1.55 (4-DCM bundle $4.65),
+non-pro depth $12.10 (bundle $36.50), professional display $134.50, Non-Display Category C $363
+(Basic), Category A1 $609 (Basic), User Non-Display Category A (single natural user) $457,
+real-time distribution $29,280/year. These apply to direct licensees and commercial/distribution
+arrangements; **they are not an add-on to the providers' personal plans above**. CME policies:
+default unit of count is the **Device**; access must be controlled by an entitlement system.
+
+**Definitions relevant to a private Cloudflare backend.**
+
+- Databento (VERIFIED live-data guide): **Internal** = "Any use of market data within the licensed
+  company or individual user's private environment"; **Personal** = "solely for a non-professional
+  individual's own investment decisions, research, or educational purposes and cannot be shared or
+  leveraged for profit"; **Display** = shown in human-readable form "on a terminal, screen, or other
+  device internally"; **Non-display** = "processed directly by a device ... algorithmic trading ...
+  internal analytics, or other non-public backend applications. Note that some venues don't
+  automatically consider API use as a non-display use case ... Some venues support personal
+  non-display use." Other venue rows (ICE, EEX) say "(display or non-display)"; **the CME Personal
+  row does not state display or non-display.**
+- Massive (VERIFIED market data terms): licence "exclusively for your personal, non-business, and
+  non-commercial purposes", "you may not use the Market Data to build an application intended for use
+  by end users other than you"; "any and all Market Data is **strictly for display use only**";
+  prohibited: "(d) Use Market Data for **non-display use** or to create derivative works ... unless
+  you are licensed to do so"; Market Data may not be transmitted "to any other computer, server,
+  website ... for publication or distribution or for any business or commercial enterprise" without
+  consent.
+
+Neither provider's public documentation explicitly classifies Fume's case (one natural person, one
+private app, a Durable Object that aggregates the feed server-side and shows the chart only to that
+person, no redistribution). Both need **one confirmation** (see open questions). Massive's explicit
+display-only / no-non-display wording makes its answer more likely to be restrictive; Databento's
+"internal ... private environment" definition is closer to Fume's case, but still not explicit for
+CME.
+
+### Provider findings
+
+**Databento.** Category A (independent vendor; direct capture at CME Aurora DC3).
+
+- Coverage (VERIFIED datasets/GLBX.MDP3): all CME Globex futures/options/spreads on **CME, CBOT,
+  NYMEX, COMEX**, 650,000+ symbols, since 2010-06-06; MDP 3.0 is the sole Globex feed → **GC, SI, CL,
+  NQ, YM (and the micros) VERIFIED** via the venue mapping above.
+- Standard plan contents (VERIFIED pricing page comparison table): live **L0** (OHLCV-1s/1m/1h/1d,
+  Definitions, Statistics, Status) and **L1** (Trades, MBP-1, TBBO, BBO, CBBO, CMBP-1); **live L2
+  (MBP-10) and L3 (MBO) not included**. History: **16+ years of L0** (bars, definitions,
+  statistics, status), **1 year of L1** (this is the included **tick/trade** history), 1 month of
+  L2/L3; more is **pay-as-you-go**, not included.
+- Live transport (VERIFIED docs/api-reference-live): Raw API over a **regular TCP socket**,
+  `glbx-mdp3.lsg.databento.com:13000`; text control lines; **CRAM** (SHA-256 of `challenge|key`,
+  reply `<hex>-<last 5 chars of key>`; the key is never sent); `encoding=json` gives **JSON lines**
+  (CSV not supported live); multiple subscriptions/schemas in one session; heartbeat SystemMsg
+  (`heartbeat_interval_s`).
+- Recovery (VERIFIED): **intraday replay of the last 24 hours** via `start` per subscription (ISO
+  8601 or ns), records filtered on `ts_event`; **`REPLAY_COMPLETED` SystemMsg per schema** when caught
+  up; documented exactly-once procedure (store last `ts_event` + number of records at that
+  timestamp per instrument, resubscribe from the lowest, drop duplicates); for GLBX.MDP3 the
+  **definition schema is replayable for the entire weekly session**; gateway restarts Saturday 02:15
+  CT (and possibly mid-week).
+- Trade record (VERIFIED trades schema): `ts_event` (matching engine, **ns**), `ts_recv` (capture,
+  ns), `ts_in_delta`, **venue `sequence`**, `instrument_id`, **aggressor `side`**, `price` (1e-9
+  fixed point), `size`, `flags` (event end, data quality), optional `ts_out`.
+- Reference (VERIFIED definitions): `asset` (root), `raw_symbol`, `exchange`, `expiration`,
+  `activation`, `maturity_year/month`, `min_price_increment`, **`min_price_increment_amount`**
+  (tick value), `unit_of_measure(_qty)`, `currency`; no first-notice field found. Statistics (OI,
+  settlement, volume) and Status (market state) schemas; **no forward schedule/holiday API found**.
+- Symbology (VERIFIED): parent `GC.FUT`, raw `GCZ6`, numeric instrument_id, continuous
+  `[ROOT].[c|n|v].[rank]` (calendar / open interest / volume roll, **unadjusted**).
+- Limits (VERIFIED): **10 simultaneous sessions per dataset per team (Standard)**; max 5 new
+  connections per second per source IP per gateway.
+
+**Massive** (formerly Polygon.io). Category A (independent vendor).
+
+- VERIFIED: futures **generally available since 2026-05-28**; pricing page: every futures plan
+  covers "**All Futures Tickers**" on **CME, CBOT, NYMEX, COMEX** → **GC, SI, CL, NQ, YM treated as
+  VERIFIED** at the plan-definition level (no per-product list was checked).
+- Futures Advanced: **$199/month**, real-time, trades, top of book, WebSockets, second/minute
+  aggregates, flat files, **7+ years of history** (plan wording; trades and quotes flat files per
+  exchange), individual non-pro only.
+- WebSocket (VERIFIED): `wss://socket.massive.com/<asset class>`, JSON, auth
+  `{"action":"auth","params":"<key>"}` (key sent inside TLS), subscribe `T.<ticker>` / wildcard.
+  Trade message: `sym, p, s, t` (**ms**), `q` ("increasing, unique per ticker, non-sequential");
+  **no trade id, no conditions, no aggressor side**. One WebSocket connection per asset class by
+  default; one connection can take all tickers.
+- REST (VERIFIED): `/futures/v1/trades/{ticker}` with **ns `timestamp`, `sequence_number`,
+  `report_sequence`, `channel`**, `session_end_date`, up to 50,000 per page, real-time on Advanced;
+  aggregates 1 s … session (built from trades); contracts (first/last trade, settlement date, tick
+  sizes, active); products (units, currency; no tick value/multiplier field seen for index futures);
+  **schedules** (pre_open/open/close in UTC with holiday adjustments, from 2024-06-10); market status.
+- Recovery: **no stream replay**; WS `q` cannot detect gaps (non-sequential); missed trades can be
+  refetched from REST trades (ns, sequence_number). Whether WS `q` equals REST `sequence_number`
+  (needed for exact boundary de-duplication) is **UNKNOWN**. Corrections/busts on the stream:
+  **UNKNOWN**.
+
+**Other candidates (unchanged conclusions).** **dxFeed**: individuals only via third-party
+platforms; API is contact-sales → eliminated for a self-serve single-user project. **Tradovate**:
+live funded account ≥ $1,000 + $25/month API add-on; API market data requires a CME sub-vendor ILA
+(VERIFIED support article updated 2026-09-16; cost THIRD-PARTY $290–390) → execution broker
+candidate. **Rithmic**: R | Protocol API (WebSocket + protobuf), conformance testing, via an FCM →
+execution-first. **CQG**: individual Client APIs must run on the same machine as the desktop client
+→ eliminated. **IBKR**: funded IBKR Pro account, username/password (OAuth self-service for
+individuals UNKNOWN), 10 req/s, nightly reset → broker + data option with high complexity. **CME
+Group WebSocket API**: JSON WebSocket, top of book conflated to 500 ms, $0.50/GB + ILA fees,
+business onboarding → later commercial option only.
+
+### Recovery after DO reconstruction, deploy, network loss or provider disconnect
+
+| Step                            | **Databento** (documented)                                                                            | **Massive** (documented + inferred)                                                                                                |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| What the hub must persist       | per schema/instrument: last `ts_event` + count of records at that `ts_event` (small, DO storage)      | last trade timestamp (+ WS `q`) per contract                                                                                       |
+| Reconnect                       | TCP connect, CRAM, subscribe each schema with `start = min(last ts_event)`                            | WS connect, auth, subscribe                                                                                                        |
+| Missed trades                   | **replayed by the gateway** (up to 24 h), in order                                                    | refetched via REST `/futures/v1/trades` from the last timestamp; stream resumes at "now"                                           |
+| Boundary / duplicates           | **exactly-once by the documented rule** (drop records < stored ts; drop the first N at the stored ts) | overlap between REST and live WS must be reconciled; exact only if WS `q` = REST `sequence_number` (UNKNOWN); WS gaps undetectable |
+| "Caught up" signal              | **`REPLAY_COMPLETED`** per schema, then live records                                                  | none (REST response + first live message)                                                                                          |
+| Contract metadata after restart | definitions replayable for the whole weekly session                                                   | REST contracts/products                                                                                                            |
+| Live candle reconstruction      | rebuild the active candle exactly from replayed trades                                                | rebuild from REST trades (ns) + live WS (ms); boundary approximate unless `q` matches                                              |
+| Deploy / eviction / 15-min rule | same procedure; nothing lost within 24 h                                                              | same REST backfill; small boundary risk                                                                                            |
+| Beyond 24 h / long outage       | historical API (L1 trades: 1 year on Standard)                                                        | REST trades/aggregates (history per plan)                                                                                          |
+
+Both still reconcile with provider historical bars for the chart (neither CME nor the providers
+publish exchange-official 1-minute bars; see ARCHITECTURE §8). Databento's recovery is
+**provably complete and duplicate-free within 24 hours**; Massive's is **workable but not provably
+exact** from public documentation.
+
+### Cloudflare integration
+
+- **Massive:** Durable Object → outbound WebSocket (TLS) → JSON auth/subscribe → JSON arrays: the
+  S3-proven pattern, essentially the Alpaca adapter again. Incoming frames are billed as requests
+  at 20:1 (S3 measurement).
+- **Databento** (VERIFIED Cloudflare docs: `connect()` from `cloudflare:sockets` works in Durable
+  Objects; readable/writable streams; `secureTransport: "off"` allowed; only port 25 blocked; an open
+  TCP socket keeps a DO in memory up to 15 minutes per connection, the rule already measured in S3):
+  Durable Object → `connect({ hostname: "glbx-mdp3.lsg.databento.com", port: 13000 })` → read text
+  greeting + `cram=` challenge → WebCrypto SHA-256 → send `auth=...|dataset=GLBX.MDP3|encoding=json
+|heartbeat_interval_s=...` → read `success=1` → send subscription lines (trades, definition,
+  status, statistics; `stype_in=parent|symbols=GC.FUT,...|start=<ns>`) → `start_session` → split the
+  byte stream on `\n` → JSON.parse → normalize to Fume `MarketEvent`s. **No Python/C++/Rust, no SDK,
+  no DBN decoder and no native module are required** for this path (the JSON encoding is
+  documented for the live API). Remaining engineering: a streaming line splitter, 1e-9 price/uint64
+  timestamp conversion (JSON field encoding to be confirmed in a spike), the replay de-dup state in
+  DO storage, and reconnect/backoff. Estimated a moderate adapter, somewhat larger than Alpaca's.
+  Risks: **plaintext TCP** (the key is protected by CRAM; the market data itself is unencrypted);
+  Cloudflare's shared outbound IPs vs the 5-connections/second/IP gateway limit; whether incoming
+  TCP bytes count toward DO request billing is **UNKNOWN** (they are not WebSocket messages).
+
+### Head-to-head: Massive vs Databento (one private non-professional user)
+
+| Aspect                         | **Massive Futures Advanced**                                                     | **Databento Standard**                                                                              |
+| ------------------------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Monthly personal price         | **$199**                                                                         | **$199**                                                                                            |
+| Exchange licensing             | CME Subscriber Addendum, non-pro, ≤ 2 devices; no extra fee disclosed            | CME personal **included** (≤ 2 devices), "No license fees"                                          |
+| GC / SI / CL / NQ / YM         | VERIFIED (plan: all futures tickers on the 4 exchanges)                          | VERIFIED (all Globex instruments)                                                                   |
+| Transport                      | WebSocket (TLS), JSON                                                            | raw TCP (no TLS documented), text control + JSON lines                                              |
+| Cloudflare implementation      | trivial (S3-proven pattern)                                                      | feasible via `cloudflare:sockets`; moderate custom adapter                                          |
+| Live trade timestamps          | WS **ms**; REST ns                                                               | **ns** `ts_event` + `ts_recv` (+ `ts_out`)                                                          |
+| Trade identity / quality       | per-ticker `q` (non-sequential); no id, conditions or side                       | venue `sequence`, `instrument_id`, aggressor side, quality flags                                    |
+| Recovery / replay              | REST backfill; boundary not provably exact                                       | **24 h replay, REPLAY_COMPLETED, documented exactly-once**                                          |
+| Historical depth (included)    | 7+ years (plan wording, incl. trades flat files)                                 | 16+ years L0 bars/definitions/statistics; **1 year** L1 trades; more pay-as-you-go                  |
+| Reference metadata             | contracts (dates, tick sizes), products (units), no tick value for index futures | definitions incl. **tick value**, expiration, activation, root; statistics (OI, settlement); status |
+| Session / schedule metadata    | **schedules API** with holiday adjustments (from 2024-06-10)                     | status (live state) only; forward schedule needs a CME calendar source                              |
+| Contract resolution            | contracts API by product code, point-in-time `date`                              | parent `ROOT.FUT`, definitions, continuous c/n/v (unadjusted)                                       |
+| Connection limits              | 1 WS per asset class (all tickers)                                               | 10 sessions per dataset; 5 new conn/s/IP                                                            |
+| Server-side personal licensing | ambiguous; terms are **display-only, no non-display**                            | ambiguous for CME; definitions include "individual user's private environment"                      |
+| Future commercial path         | Business $999 per exchange per month (+ distribution terms)                      | Plus $1,750/month (external distribution) / Unlimited $4,500; CME commercial $973/exchange          |
+| Implementation difficulty      | **low**                                                                          | **moderate**                                                                                        |
+
+### Re-scored for Fume's priorities
+
+| Priority (weight order)                  | Massive                           | Databento                                      | Edge                                    |
+| ---------------------------------------- | --------------------------------- | ---------------------------------------------- | --------------------------------------- |
+| 1. Reliable real-time trade data         | good (ms, no id/side)             | excellent (ns, venue sequence, side, flags)    | **Databento**                           |
+| 2. Recovery after reconstruction/network | REST backfill, boundary inexact   | documented 24 h exactly-once replay            | **Databento**                           |
+| 3. Contract/reference metadata           | good + schedules API              | excellent definitions/statistics; no schedules | Databento (slight); schedules → Massive |
+| 4. Historical data                       | 7+ y incl. trades                 | 16+ y bars, 1 y trades (more pay-as-you-go)    | mixed (bars: Databento; ticks: Massive) |
+| 5. Cloudflare compatibility              | proven pattern                    | feasible, custom TCP                           | Massive                                 |
+| 6. Licensing clarity (private user)      | display-only terms; question open | personal CME included; question open           | Databento (slight)                      |
+| 7. Price                                 | $199                              | $199                                           | tie                                     |
+| 8. Implementation complexity             | low                               | moderate                                       | Massive                                 |
+
+### Contract model (provider-neutral, conceptual; unchanged)
+
+Root/product (tick rules, multiplier/tick value, currency, sessions) → backend contract resolution
+(explicit month or a recommended active contract) → a Fume `Instrument` for **one specific
+contract** (existing `FutureContractSpec`: root, contract month, expiration, last trade, first
+notice, tick value), opaque contract-specific InstrumentId, no hard-coded front month. First
+notice dates need a CME calendar source (not found in either provider's reviewed fields). Rollover
+options (calendar, volume/OI, user-selected) stay undecided; **explicit contract + a recommended
+default** is safer than a synthetic continuous series for initial support.
+
+### Sessions (unchanged)
+
+CME Globex: Sunday 18:00 ET open, Friday 17:00 ET close, daily 17:00–18:00 ET break; the trading day
+is the day the session ends. Fume's `MarketSession` windows (crossing midnight, breaks) and
+`sessionDate` already express this: **no model change needed**. Holidays/early closes need a
+schedule source: Massive's schedules API or a CME holiday calendar (Databento: status only).
+
+### Permanent hub topology (preferred topology, unchanged; not implemented)
+
+**Option B: provider/feed-scoped Durable Object hubs** (e.g. `alpaca/iex` and
+`futures/<selected-provider>`), each owning one upstream and its own subscriptions, limits,
+reconstruction and resync; the browser receives an opaque stream key per instrument. Compared with
+one global object (shared blast radius, mixed lifecycles) and per-client session objects (extra hops
+and cost), B isolates credentials usage paths, connection limits, failures, recovery and
+subscriptions, and usually keeps only one hub open (one chart = one instrument). The corrected
+research does not change this; Databento's 10 sessions per dataset even leave room for a separate
+replay/backfill session per hub.
+
+### Cost model (per month, one private non-professional user)
+
+- **Market data:** Massive **$199** or Databento **$199** (CME personal licensing included; no
+  exchange fee added in either provider's current official material). If a provider ruled Fume's
+  backend to be commercial or non-display use, commercial CME licensing would apply instead (e.g.
+  Databento's CME commercial $973/exchange); that is the open question, not an assumed cost.
+- **Cloudflare (S3 measured 460.8 GB-s per open hub-hour):** futures hub 23 h/day ≈ 10,598 GB-s/day
+  (fits Free 13,000/day); futures + equities hubs both open 16 h/day ≈ 14,746 GB-s/day exceeds Free;
+  on Paid, 30 days × 23 h ≈ 318k GB-s (within 400k included). Futures message rates are
+  **UNKNOWN** until measured; with Databento TCP, request billing for incoming bytes is UNKNOWN.
+
+### Open questions (require provider confirmation; not contacted)
+
+1. **Databento (the one licensing question):** "Does a private single-user Durable Object backend,
+   used only to power that same subscriber's personal chart, remain covered by Databento Standard
+   personal CME licensing?"
+2. **Massive (the equivalent question):** "May an eligible individual non-pro Futures Advanced
+   subscriber receive the real-time futures feed in a private server-side backend (a Cloudflare
+   Durable Object) that aggregates it into charts displayed only to that same person, given the
+   terms' 'strictly for display use only' and non-display restrictions?"
+3. Massive: "Is the WebSocket trade `q` the same value as the REST trades `sequence_number`? Are
+   trade corrections/cancellations delivered on the WebSocket? Is open interest available?"
+4. Databento: "How are `price` and uint64 timestamps encoded in live `encoding=json` records? Is a
+   TLS endpoint available for the Raw API? Are Cloudflare's shared outbound IP ranges a problem for
+   the 5-connections-per-second-per-IP limit?"
+5. Both: device counting when one person uses the app on a phone and a laptop (both plans allow up
+   to two devices).
+6. Later (commercial platform): distribution terms and CME per-user fees (Databento Plus / Massive
+   Business).
+
+Broker-side questions (Tradovate CME sub-vendor cost; IBKR individual OAuth) only matter if a
+combined broker+data provider is chosen; they are not blocking for the data decision.
+
+### BEST TECHNICAL FIT FOR FUME
+
+**Databento (Standard).** It wins the two highest priorities: trade data quality (nanosecond
+matching-engine timestamps, venue sequence numbers, aggressor side, quality flags, direct capture)
+and recovery (24-hour intraday replay with a documented exactly-once procedure and a
+`REPLAY_COMPLETED` signal), which maps directly onto the S3 constraint that Durable Object state is
+disposable and reconstruction must be expected. Its definitions/statistics/status schemas give the
+richest contract metadata, and its personal CME licensing is explicitly included at the same $199.
+
+### BEST SIMPLEST IMPLEMENTATION
+
+**Massive (Futures Advanced).** Same JSON-over-WebSocket model as the Alpaca adapter and the
+S3-proven hub, a schedules API for sessions and holidays, and 7+ years of history including trades,
+also at $199. The cost is weaker recovery (REST backfill with an inexact boundary), millisecond
+stream timestamps, fewer trade attributes, and display-only terms that make the private-backend
+question sharper.
+
+### RECOMMENDED PROVIDER FOR FUME
+
+**Databento**, subject to one confirmation: that its Standard personal CME licensing covers a
+private single-user Durable Object backend. The two labels differ because Fume is a long-term
+trading platform whose correctness depends on complete, duplicate-free trade streams after every
+Durable Object reconstruction, deploy and network loss; Databento's replay provides that by design,
+while Massive's simplicity would have to be paid for later in reconciliation edge cases. The extra
+work (a `cloudflare:sockets` + JSON-lines adapter) is moderate and needs no SDK. If Databento cannot
+confirm the licensing, **Massive** is the fallback (after its own confirmation). A trading
+**broker** remains a separate, later decision (Model A: data vendor + separate broker behind
+`BrokerageProvider`).
+
+**Sources (read 2026-09-30):** cmegroup.com contract specs (GC, SI, CL, NQ, YM, MGC, SIL, MCL, MNQ,
+MYM); CME Group Fee List effective 2026-01-01; cmegroup.com Information Policies; CME Real-Time
+Futures and Options Data API page; databento.com/pricing (incl. comparison table), docs/portal/live-data
+(2026 licence table and definitions), datasets/GLBX.MDP3, Live API docs (overview, authentication,
+intraday replay, system messages, connection limits, encodings, recovery, maintenance), trades
+schema, instrument definitions, symbology; massive.com/pricing (futures), legal/market-data-terms-of-service,
+docs (futures WebSocket trades, REST trades, contracts, products, schedules, aggregates, WebSocket
+quickstart), knowledge base (WebSocket connections), blog (futures GA, professional status),
+business-futures; dxfeed.com CME page; support.tradovate.com "Tradovate API Access"; rithmic.com/apis;
+cqg.com/products/cqg-apis; IBKR Campus Web API documentation; developers.cloudflare.com TCP sockets
+and Workers limits.
