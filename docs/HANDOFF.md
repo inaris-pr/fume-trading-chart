@@ -7,13 +7,32 @@
 Status: **S2 COMPLETE · S3 COMPLETE · Owner DO decision: GO — Durable Object hub primitive approved ·
 permanent streaming NOT IMPLEMENTED**
 
-**Futures/multi-provider checkpoint: RESEARCH APPROVED (2026-09-30).** Owner direction:
-**Databento is the PREFERRED futures provider, conditional on written confirmation** that the
-private single-user Cloudflare Durable Object backend is covered by Standard personal CME licensing
-($199/month, CME personal licensing included, up to 2 devices). **Massive is the fallback**
-(needs its own written server-side-use approval). No provider is locked into the architecture; no
-account, subscription, API key or futures code exists. Details:
-[research.md](research.md#futures-provider--multi-provider-checkpoint-research-2026-09-30-corrected-same-day-databento-preferred-pending-licensing-confirmation).
+**CURRENT PROVIDER DIRECTION (owner, 2026-09-30):**
+
+- **US equities / ETFs: Alpaca** (Stage 4 implementation unchanged; Massive Stocks not needed).
+- **Initial futures: Massive Futures Starter** ($29/month, already owned) for **GC, SI, CL, NQ,
+  YM**; data may be ~10 minutes delayed; real-time and trade-level futures are not required
+  initially. Intended provider, **pending Massive's written approval of the private Cloudflare
+  backend use**.
+- **Databento:** deferred as a researched fallback, not selected.
+- Reason: Alpaca already works and needs no extra stock-data subscription; Massive Starter was
+  locally proven sufficient for the delayed futures chart; removing a working provider only to
+  reduce vendors has no architectural benefit. Fume stays provider-neutral (no provider-specific
+  chart logic in the browser; ARCHITECTURE.md names no permanent provider).
+- **Approved conceptual futures model** (not implemented): Massive REST 1m aggregates → canonical
+  Fume 1m history; delayed WebSocket 1 s aggregates → provisional current minute; Massive 1m
+  aggregate → authoritative final/reconciled minute; Fume 1m → 5m / 15m / 1h / 4h / 1d. Reconnect:
+  reconnect → authenticate → resubscribe → REST 1m overlap → replace/reconcile recent bars → resume
+  1 s aggregates. Massive aggregate bars are authoritative for initial futures.
+- **Connection limit (observed):** all five futures fit on one WebSocket; a second connection with
+  the same key displaced the older one (`max_connections`, close 1008). Permanent design: one
+  centralized Massive provider/feed hub; no browser connections to Massive; dev processes must not
+  compete with a deployed hub; on 1008 back off and surface the conflict, never a reconnect fight.
+- **Cloud deployment of Massive data: BLOCKED PENDING WRITTEN MASSIVE CONFIRMATION.** Local
+  capability testing is complete (spike `apps/worker/spikes/massive-futures-starter/`,
+  NON-PRODUCTION). Details:
+  [research.md](research.md#product-direction-update--massive-futures-starter-capability-spike-2026-09-30-intended-futures-provider-cloud-blocked-pending-massive-licensing).
+- No permanent futures implementation exists.
 
 - The GO approves the DO hub **primitive** only. Preferred permanent topology after the futures
   checkpoint: **provider/feed-scoped DO hubs** (one hub per provider feed); not implemented.
@@ -148,48 +167,34 @@ pnpm scan:bundle    # after pnpm build
 
 ## Exact next action
 
-**NEXT ACTION (owner): obtain written Databento confirmation for this exact use case before any
-implementation or purchase.** Claude does not contact Databento, create an account, buy Standard or
-request API keys.
+**NEXT ACTION (owner): obtain written Massive licensing confirmation for the private Cloudflare
+backend architecture.** Claude does not contact Massive.
 
-Use case to confirm:
+Confirm that an individual Futures Starter subscriber may use: Massive → private Cloudflare Durable
+Object → private Fume client → the same individual subscriber only, with no customers, no third
+parties, no redistribution, no resale, no commercial service and no public API (and whether the
+backend counts toward the two-device limit). A draft support message was provided in the spike
+report.
 
-- one natural person; non-professional / personal use
-- one private Fume application
-- Databento Standard, CME data (GLBX.MDP3)
-- the backend connection originates from a Cloudflare Durable Object, which processes/normalizes
-  the data
-- the data is displayed only to that same subscriber
-- no customers, no third parties, no redistribution, no commercial service, no resale, no external
-  API exposing the data
+**If Massive confirms (in writing):** the next checkpoint is a **small Cloudflare Massive integration
+spike** (isolated, non-production, like S3) validating:
 
-Question: "Does this private single-user Cloudflare Durable Object backend remain covered by
-Databento Standard personal CME licensing, or would it be classified as non-display/commercial use
-requiring a different license?" Also ask:
+- one centralized Massive upstream connection
+- Durable Object lifecycle
+- delayed aggregate delivery
+- reconnect
+- REST reconciliation
+- `max_connections` / 1008 behavior
+- multiple Fume clients sharing the same upstream
 
-- whether this counts as one of the two permitted personal devices
-- whether server-side processing changes the device count
-- whether Cloudflare-hosted processing is allowed
-- whether using the Raw API from Cloudflare is permitted
-- whether any separate CME non-display agreement or fee would apply
+Then **STOP** again before permanent implementation.
 
-**If Databento confirms (in writing):**
+**If Massive does not confirm:** do not deploy Massive server-side. Reassess another permitted
+Massive architecture, or the Databento fallback (research.md).
 
-1. Run a tiny Databento technical spike (isolated, non-production, like S3).
-2. Use free/trial/historical capability first, if available.
-3. Test Cloudflare Durable Object outbound TCP (`cloudflare:sockets`) to the Databento Raw API.
-4. Verify: TCP connect; CRAM auth; JSON encoding (price and timestamp representation); GC/SI/CL/NQ/YM
-   parent-symbol subscriptions; contract definitions; 24-hour intraday replay; the
-   replay-complete signal; the reconnect/dedup boundary; Cloudflare lifecycle behavior
-   (15-minute rule, eviction, deploy).
-5. **STOP for owner approval.**
-6. Only after that: implement the permanent futures adapter and the provider-scoped hub.
-
-**If Databento does not confirm:** evaluate Massive as the fallback and obtain equivalent written
-server-side-use approval from Massive before any implementation.
-
-Until then, do NOT: create Databento code, modify Worker or chart code, add futures symbols, push
-the branch, implement permanent Stage 5 streaming, or begin Stage 6.
+Until then, do NOT: deploy Massive data to Cloudflare, upgrade Massive or buy Massive Stocks, remove
+or replace Alpaca, modify the Stage 4 Alpaca implementation or chart code, implement permanent
+Massive futures support or permanent Stage 5 streaming, push, open a PR, or begin Stage 6.
 
 ## Recovery instructions
 

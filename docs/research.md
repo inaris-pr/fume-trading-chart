@@ -307,6 +307,11 @@ to its own written server-side-use approval). Databento is **not** locked into t
 architecture: no account, no subscription, no API key, no adapter, no code. Provider/feed-scoped
 Durable Object hubs remain the preferred topology (not implemented). Next action: HANDOFF.md.
 
+**UPDATE (later on 2026-09-30):** the owner changed the requirement to a 10-minute-delayed futures
+chart and already holds Massive Futures Starter; **Databento is deferred** and Massive Starter is
+evaluated first. See "Product-direction update + Massive Futures Starter capability spike" at the
+end of this file.
+
 Research and design only: no provider locked in, no account, no key, no code. Labels: **VERIFIED**
 (official source read on 2026-09-30), **PROVIDER-STATED** (official provider page, not independently
 checked), **THIRD-PARTY** (non-official, flagged), **UNKNOWN** (not answerable from public docs).
@@ -630,3 +635,207 @@ quickstart), knowledge base (WebSocket connections), blog (futures GA, professio
 business-futures; dxfeed.com CME page; support.tradovate.com "Tradovate API Access"; rithmic.com/apis;
 cqg.com/products/cqg-apis; IBKR Campus Web API documentation; developers.cloudflare.com TCP sockets
 and Workers limits.
+
+## Product-direction update + Massive Futures Starter capability spike (2026-09-30; intended futures provider, cloud blocked pending Massive licensing)
+
+**CURRENT PROVIDER DIRECTION (owner, 2026-09-30; supersedes the Databento preference above):**
+
+| Market                                  | Provider                                                         |
+| --------------------------------------- | ---------------------------------------------------------------- |
+| US equities / ETFs                      | **Alpaca** (unchanged Stage 4 implementation)                    |
+| Initial futures: **GC, SI, CL, NQ, YM** | **Massive Futures Starter** (intended; data ~10 minutes delayed) |
+| Databento                               | **deferred** as a researched fallback, not selected              |
+| Massive Stocks                          | **not needed** at this time                                      |
+
+Reasons: Alpaca equities are already implemented and validated and provide Fume's equity/ETF data
+without another paid stock-data subscription; Massive Futures Starter (already owned, $29/month) has
+been locally proven sufficient for Fume's delayed futures chart; there is no architectural benefit
+to removing a working provider solely to reduce the number of vendors. Real-time futures and raw
+trade-level futures streaming are **not required initially**. Fume stays **provider-neutral**: the
+browser contains no Alpaca- or Massive-specific chart logic, and neither provider is written into
+ARCHITECTURE.md as permanent. **Cloud deployment of Massive data is BLOCKED PENDING WRITTEN MASSIVE
+CONFIRMATION** (see Licensing below); local capability testing is complete. Permanent Massive
+futures support is not implemented.
+
+Spike: `apps/worker/spikes/massive-futures-starter/` (NON-PRODUCTION, local Node only, not
+Cloudflare; `rest.ts`, `ws.ts`). Run 2026-09-30 17:25–17:52 UTC (13:25–13:52 ET, Globex open).
+Labels: **VERIFIED** (official page read), **OBSERVED** (seen in this spike), **UNKNOWN**.
+
+### Starter plan (VERIFIED massive.com/pricing futures tab + docs "Plan Access/Recency" tables)
+
+$29/month, "Great for aggregates", Individual use: All Futures Tickers; Unlimited API Calls; 2 Years
+Historical Data; CME, CBOT, NYMEX, COMEX; 10-minute Delayed Data; Reference Data; Minute Aggregates;
+Flat Files; WebSockets; Snapshot; Second Aggregates. **Not included:** Trades and Top of Book Quotes
+(Developer $79 / Advanced $199). Per-endpoint docs: aggregates REST "10-minute delayed", 2 years;
+WebSocket `A` and `AM` "10-minute delayed"; snapshot "10-minute delayed"; contracts/products/schedules
+"Updated daily"; market status "Updated in real time". The Starter card does not carry the
+Advanced plan's "Non-pros only" tag, but the market data terms apply to all futures data (below).
+
+OBSERVED: `/futures/v1/trades` and `/futures/v1/quotes` → **HTTP 403** "You are not entitled to this
+data"; everything else above returned 200. The key was accepted by REST (Authorization: Bearer
+header) and by both WebSocket hosts.
+
+### Contract discovery (OBSERVED; no ticker hard-coded)
+
+Products (`/futures/v1/products?product_code.any_of=…`) and contracts
+(`/futures/v1/contracts?product_code=<root>&date=<today>&active=true&type=single`):
+
+| Root | Venue (MIC)  | Contract unit (products) | Tick (contracts) | Tick value (tick × unit) | Settlement          | Nearest active contracts (last trade date)          | Recommended now (highest session volume) |
+| ---- | ------------ | ------------------------ | ---------------- | ------------------------ | ------------------- | --------------------------------------------------- | ---------------------------------------- |
+| GC   | COMEX (XCEC) | 100 TRYOZ                | 0.1              | $10                      | deliverable         | GCV6 (2026-10-28), GCX6 (11-25), GCZ6 (12-29), GCF7 | **GCZ6** (127k vs GCV6 781)              |
+| SI   | COMEX (XCEC) | 5000 TRYOZ               | 0.005            | $25                      | deliverable         | SIV6 (10-28), SIX6 (11-25), SIZ6 (12-29), SIF7      | **SIZ6** (31.7k)                         |
+| CL   | NYMEX (XNYM) | 1000 BBL                 | 0.01             | $10                      | deliverable         | CLX6 (10-20), CLZ6 (11-20), CLF7 (12-21), CLG7      | **CLX6** (172k vs CLZ6 53k)              |
+| NQ   | CME (XCME)   | 20 IPNT                  | 0.25             | $5                       | financially settled | NQZ6 (12-18), NQH7, NQM7, NQU7                      | **NQZ6** (431k)                          |
+| YM   | CBOT (XCBT)  | 5 IPNT                   | 1                | $5                       | financially settled | YMZ6 (12-18), YMH7, YMM7, YMU7                      | **YMZ6** (54k)                           |
+
+- Ticker syntax: root + CME month code + **one-digit year** (`GCZ6`, `NQH7`); spreads/combos are
+  `NQH7-NQM7` (`type=combo`). Tick values computed from the two endpoints match the CME
+  specifications recorded above for all five.
+- Contract fields: `ticker, product_code, first_trade_date, last_trade_date, settlement_date,
+days_to_maturity, trade_tick_size, settlement_tick_size, spread_tick_size, trading_venue,
+group_code, type, min/max_order_quantity, active, date`. **No first-notice date, no open interest,
+  no multiplier field** (multiplier = products `unit_of_measure_qty`).
+- Gotchas: without `date=`, `/contracts` returns **one row per contract per historical day** (from
+  2018); `sort` accepts only `date|product_code|ticker`, so sort by expiry client-side. Point-in-time
+  contract lookups returned results for 2025-10-01 but **0 rows for 2025-03-03 and earlier**
+  (cause UNKNOWN), although aggregates exist back to ~2024-10-01.
+- Snapshot (`/futures/v1/snapshot?ticker.any_of=…`): `details{ticker, settlement_date}`,
+  `session{open, high, low, close, volume, settlement_price, previous_settlement, change,
+change_percent}`, `last_minute`, and — although the plan excludes trades/quotes — **delayed
+  `last_trade` and `last_quote` objects** (`timeframe: "DELAYED"`, ~10 min old). By
+  `product_code` the snapshot pages are mostly spreads (GC/CL first page: 95–100 of 100 rows), so
+  query by `ticker.any_of` instead. **Data-quality anomaly:** deferred NQ contracts (NQH8, NQU7) showed
+  session prices ~6,000–7,000 against ~30,800 for NQZ6, with sizable volumes; the recommendation rule
+  must restrict to near contracts and sanity-check.
+
+**Proposed contract resolution (not implemented):** user selects a root (`NQ`) → backend lists
+active single contracts for today, sorts by `last_trade_date`, snapshots the nearest ~4–6 and
+recommends the one with the highest session volume (GC/SI: the active month, not the nearest
+serial month; CL: rolls before `last_trade_date`) → the chart instrument is that specific contract
+→ the user can choose another contract explicitly. No synthetic continuous series. First-notice
+dates (GC/SI/CL are deliverable) still need a CME calendar source.
+
+### REST aggregates (OBSERVED)
+
+- `/futures/v1/aggs/{ticker}?resolution=1min` fields: `ticker, window_start` (**ns**),
+  `session_end_date, open, high, low, close, volume, transactions, dollar_volume` (numbers).
+  Resolutions 1sec, 1/5/15min, 1/4hour and 1session all returned 200 on Starter. Hour/4-hour bars
+  are **UTC-clock aligned** (e.g. 16:00Z), not CME-session aligned → Fume builds higher timeframes
+  from 1m itself (as planned).
+- **Session-date semantics:** bars before the 16:00 CT close carry that day's `session_end_date`;
+  bars from 17:00 CT (22:00Z during CDT) carry the **next** day. The one-hour maintenance break is a
+  clean gap (last bar 20:59Z, next 22:00Z). This matches Fume's `sessionDate` (the ending day).
+  `1session` bars are keyed by the **calendar day before** the session end at 00:00Z (not the actual
+  open time) and include `settlement_price`.
+- **Pagination:** `limit` up to 50,000, `next_url` cursor; one UTC day of NQZ6 1m = 1,380 bars in
+  four pages of 400, ascending, 0 duplicates, the only non-60 s step = the maintenance break.
+  Minutes without trades have **no bar** (documented; Fume must tolerate gaps on thin contracts).
+- **1sec ↔ 1min consistency:** 59 REST 1sec bars of one minute summed exactly to the REST 1min bar
+  (O, H, L, C, volume, transactions).
+- **History depth:** 1m and 1session bars returned for 2024-10-01 (NQZ4); **none for 2024-09-03
+  (NQU4) or 2023-10-02** → ~2 years, as advertised.
+- **Observed delay:** the latest 1sec bar was consistently **600–602 s** old. The latest 1min bar
+  appeared when `window_start` was 10 min old (bar end ~9 min old) and was already final: its values
+  did not change on later polls, and 6 recent 1min bars re-fetched 5–6 minutes later were identical
+  (**no revisions observed**).
+
+### WebSocket (OBSERVED, local Node, `wss://delayed.massive.com/futures`)
+
+- Connect 0.3–0.7 s; `status connected` → send `{"action":"auth","params":<key>}` →
+  `status auth_success "authenticated"` (~1.1 s) → `{"action":"subscribe","params":"A.NQZ6,AM.NQZ6"}`
+  → one `status success "subscribed to: …"` per channel. Comma-separated multi-ticker subscription
+  worked; all five contracts × {A, AM} ran on **one connection**.
+- Events: `A` (per second) and `AM` (per minute) only; no other message types seen. Fields `ev, sym,
+v, n, s, e` are numbers but **`o, h, l, c, dv` arrive as JSON strings** (docs show numbers) →
+  the adapter must parse them. `s`/`e` are **ms**; `A` windows are exactly 1,000 ms, `AM` 60,000 ms.
+- **Delay:** arrival − window end = **603.8–605.1 s** for `A` and 604–605 s for `AM` on all five
+  contracts (i.e. 10 min + ~4 s). `A` bars stream continuously (one per second with trades; e.g.
+  NQZ6 ~1/s, SIZ6 ~1 per 7–8 s); **no repeated windows, no revisions**: each second and each minute
+  arrives once. `AM` arrives once, ~4–5 s after the delayed minute closes.
+- **Consistency:** streamed `A` bars were identical to REST 1sec bars; the sum of a full minute of
+  `A` equalled `AM`, and `AM` equalled the REST 1min bar exactly (O/H/L/C/V).
+- **No backfill on subscribe:** the stream starts at "now − 10 min"; seconds before the subscription
+  are only in REST.
+- **Reconnect:** closed, waited 20 s, reconnected: auth + resubscribe + first `A` in **1.9 s**; the
+  23 s gap was **not replayed**; REST returned the 20 missing 1sec bars (recoverable).
+- **Connection limit (important):** a **second connection with the same key is accepted and the
+  OLDER one is dropped** with `status max_connections` ("Maximum number of websocket connections
+  exceeded…") and close **1008**. Reproduced twice. This is the opposite of Alpaca (which refuses the
+  new connection with 406): a local dev process and a deployed hub would silently steal the feed from
+  each other.
+- The real-time host `wss://socket.massive.com/futures` also accepted auth with the Starter key; no
+  subscription was attempted there, so its entitlement/recency is UNKNOWN.
+
+### Session data (OBSERVED `/futures/v1/schedules`, `/futures/v1/market-status`)
+
+- Per product and `session_end_date`: events `pre_open`, `open`, `close` (and `pause` for some
+  products) in UTC. NQ normal day: open 22:00Z previous day (17:00 CT), close 21:00Z (16:00 CT) →
+  the daily break is the gap between `close` and the next `open`. **Sunday open** (session 09-28:
+  open 2026-09-27T22:00Z) and **Friday close** (session 10-02: close 21:00Z) are present.
+- **Holidays/early closes are present and future dates are published** (GC Thanksgiving 2026:
+  session 11-27 with an extra `pre_open`/`open` on 11-26 and close 19:45Z). Holiday sessions merge
+  several days into one `session_end_date` and express the halt only as a later `pre_open`/`open`
+  (no explicit halt `close`), so interpreting them needs care.
+- Every event was returned **2× (CL 13×)**; market status likewise repeated rows (CL ×13) → dedupe.
+  History starts 2024-07-31. Market status returned `open` with the current `session_end_date`.
+- Conclusion: Massive schedules can be the **primary session-calendar source** for the five roots
+  (normal hours, Sunday open, Friday close, holidays, early closes), after dedupe and validation
+  against the CME holiday calendar for the first releases. First-notice dates are not in it.
+
+### Chart suitability (answer)
+
+**Yes, Starter can support a high-quality 10-minute-delayed candlestick chart for 1m, 5m, 15m, 1h,
+4h and 1d** with historical loading (REST 1m, ~2 years, paginated), incremental updates and a moving
+delayed current candle (`A` per second), finalized minutes (`AM`, identical to REST), volume,
+session-aware bars (`session_end_date` + schedules), left paging (REST `window_start.lt`) and
+reconnect recovery (REST 1m/1sec re-fetch). Missing or limiting: no real-time data; no trades or
+quotes (no tick-by-tick, no bid/ask display beyond the delayed snapshot); no open interest; no
+first-notice dates; 2-year history limit; point-in-time contract reference only ~1 year back; a single
+WebSocket connection per account with newest-wins eviction.
+
+### Approved conceptual delayed-futures model (owner-approved 2026-09-30; NOT implemented)
+
+1. **History:** REST 1m aggregates → Fume canonical 1m history (per contract; `session_end_date` →
+   Fume session date).
+2. **Delayed current candle:** WebSocket `A` (1 s) aggregates → provisional current 1m candle
+   (O = first A open, H/L = max/min, C = last close, V = sum).
+3. **Minute finalization:** WebSocket `AM` (or REST 1m) replaces the provisional minute; observed
+   identical to REST, no revisions.
+4. **Higher timeframes:** Fume canonical 1m → 5m / 15m / 1h / 4h / 1d with Fume's own session-aligned
+   rules (Massive's hour bars are UTC-aligned and are not used).
+5. The existing trade-level aggregator stays for trade feeds (Alpaca); Starter futures do not go
+   through it. **Massive's aggregate bars are authoritative for initial futures support.**
+
+**Reconnect / reconstruction recovery (evaluated):** reconnect → auth → resubscribe → REST 1m with
+an overlap (e.g. last 15–30 min) → replace Fume's recent canonical minutes → resume `A` into the
+current minute (optionally REST 1sec for the partial current minute). **Sufficient for a delayed
+chart:** the canonical state is the provider's minute bars, which REST serves exactly and without
+observed revisions, so there is no trade-level deduplication problem. A permanent hub must also treat
+`max_connections`/1008 as "another client took the feed" (bounded backoff and an alert, never a
+reconnect loop that fights the other connection).
+
+### Connection limit: design consequences (owner-recorded 2026-09-30)
+
+OBSERVED: all five futures fit on one WebSocket connection; a second connection with the same
+account/key **displaced the existing one**, and the older connection received `max_connections` /
+close **1008**. Therefore the permanent design must use **one centralized Massive provider/feed hub**
+(the provider/feed-scoped Durable Object topology); **browser tabs never connect to Massive**; and
+**development processes must not compete with a deployed Massive hub** (mechanism to be designed).
+On `max_connections` / 1008: **back off and surface the conflict**; never start a reconnect fight.
+
+### Licensing (the only blocker for CLOUD deployment)
+
+Massive market data terms (VERIFIED verbatim 2026-09-30; no delayed-data exception): licence
+"exclusively for your personal, non-business, and non-commercial purposes"; "you may not use the
+Market Data to build an application intended for use by end users other than you"; Market Data may
+not be "transmitted, or distributed in any way (including 'mirroring') to any other computer,
+server, website, or other medium for publication or distribution or for any business or commercial
+enterprise, without Massive's express prior written consent"; "any and all Market Data is strictly
+for display use only"; prohibited "(d) Use Market Data for non-display use"; CME recipients certify
+Non-Professional status, "a maximum of two Order Routing Devices", personal/private use managing own
+assets. Local testing on the owner's machine is ordinary personal display use; a Cloudflare Durable
+Object that receives and normalizes the data is the open question. **Do not deploy Massive data to
+Cloudflare until Massive confirms in writing.** Confirmation needed: an individual Futures Starter
+subscriber may use Massive → a private Cloudflare Durable Object → a private Fume client → the same
+individual subscriber only, with no customers, no third parties, no redistribution, no resale, no
+commercial service and no public API.
