@@ -90,6 +90,18 @@ Alpaca `dailyBars` isn't subscribed in the MVP: Fume builds the daily candle its
 
 **Session mode on the live path:** the hub forwards every trade. In regular mode, the client aggregator ignores trades and minute bars whose time isn't inside a selected window, so pre/post-market prints don't appear. The current-price line follows the same rule. Its label shows the last regular-session price with an "after hours" marker outside RTH. (A last-trade-including-extended-hours display is a later option.)
 
+## Implementation status (Stage 3)
+
+Implemented and tested with the deterministic replay provider (`@fume/replay`); the same code path will be fed by Alpaca in Stage 5:
+
+- `parseRfc3339ToEpochNs`, `epochNsToMs`, `compareEpochNs`, `compareTradeOrder` in `packages/core/src/event-time.ts` (BigInt, no float for nanoseconds).
+- `LiveCandleAggregator` (`packages/core/src/live/live-aggregator.ts`): the minute state and precedence rules below, bounded dedupe, bounded retention, diagnostics.
+- `applyBufferedHandoff` and `mergeCanonicalBars` (`packages/core/src/live/handoff.ts`): the handoff steps 4-5 below.
+
+**Retention policy.** Minute state is kept for 2 × 1440 minute slots behind the newest event (two full days of 24-hour sessions; about 7 RTH sessions). Older minutes are pruned in batches, and the covered range moves forward with them. A correction (final/revised bar) or trade for a minute that is older than the retained/seeded coverage is **dropped and counted** (`eventsOutsideRetention`); a canonical bucket that starts before the coverage is **not re-folded** (`uncoveredBuckets`), because its earlier minutes are unknown. Nothing is guessed. The host seeds the aggregator with official minutes from at least the start of the previous session, which covers every bucket up to 1D.
+
+**Trade identity.** Trades are de-duplicated by `venue + tradeId` in a bounded set of the 10,000 most recent identities. Trades without an id cannot be de-duplicated; a redelivered id-less trade is counted twice (documented limitation).
+
 ## Timestamps and ordering
 
 - Every event carries `EventTime { ns, ms }` (see [domain-model.md](domain-model.md#timestamps)).

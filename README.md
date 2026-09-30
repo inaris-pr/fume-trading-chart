@@ -4,7 +4,7 @@ A single-user, web-based trading chart with a **custom Canvas 2D chart engine**,
 
 Alpaca (Basic plan, IEX feed, paper trading) is the _first_ provider behind provider-neutral interfaces. The chart and domain model don't depend on it.
 
-> **Status: Stage 2 (chart interaction and controls on deterministic data).** Zoom, pan, crosshair, symbol and timeframe controls on replay data. No market data, backend or trading yet. See [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/roadmap.md](docs/roadmap.md).
+> **Status: Stage 3 (live replay market data).** Candles update trade by trade from a deterministic replay provider; older history loads when you pan left. No real market data, backend or trading yet. See [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/roadmap.md](docs/roadmap.md).
 
 ## Scope
 
@@ -18,6 +18,7 @@ Explicitly out of scope for the MVP: indicators, drawing tools, watchlists, scan
 packages/core   provider-neutral domain types, provider interfaces, session/time-scale logic,
                 formatters, deterministic fixtures (@fume/core/fixtures)
 packages/chart  framework-independent Canvas 2D chart engine
+packages/replay deterministic replay MarketDataProvider (synthetic instruments, history, live tape)
 apps/web        React + Vite shell hosting the chart (deterministic demo data)
 apps/worker     Cloudflare Worker backend    (Stage 4)
 docs/           design, contracts, research, roadmap
@@ -55,7 +56,9 @@ pnpm dev
 
 Chart controls: mouse wheel / trackpad pinch over the chart zooms around the pointer, drag pans, the crosshair shows price, time and OHLC. On the right price axis, drag or wheel to stretch/compress prices (manual scale) and double-click to return to auto-fit. Symbols (SPY, QQQ, AAPL, NVDA, TSLA) and timeframes (1D, 4H, 1H, 15m, 5m, 1m) are deterministic replay data.
 
-Dev-only query parameters: `?symbol=SPY&tf=1h` (initial selection; also `SYN-FLAT`, `SYN-NEG`, `SYN-SUB` scale edge cases), `?bench` (render benchmark, see [docs/performance.md](docs/performance.md)).
+The replay starts at Fri 2026-09-25 14:00 ET and plays the synthetic tape (trades, then official and occasionally revised minute bars) at 20× speed through the Monday session. Pan left to load older history (a short artificial delay makes loading visible).
+
+Development/QA query parameters (not user features): `?symbol=SPY&tf=1h` (initial selection; also `SYN-FLAT`, `SYN-NEG`, `SYN-SUB` scale edge cases), `?speed=60` (replay speed), `?bench` (render and live-path benchmark, see [docs/performance.md](docs/performance.md)).
 
 ## Credentials
 

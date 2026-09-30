@@ -7,9 +7,15 @@
  * - overlay canvas: crosshair, crosshair readouts, OHLC legend. Repainted on pointer moves without
  *   rebuilding the frame. It sits on top and receives all pointer and wheel events.
  */
-import type { Bar, PriceFormatter, TimeFormatter, TimeScaleMapping } from '@fume/core';
+import type { Bar, PriceFormatter, TimeFormatter, TimeScaleMapping, UnixMs } from '@fume/core';
 import { backingStoreSize } from './layout.ts';
-import { indexSeries, type IndexedSeries } from './series.ts';
+import {
+  indexSeries,
+  mergeIntoSeries,
+  toMutableSeries,
+  type MergeResult,
+  type MutableSeries,
+} from './series.ts';
 import { CandleBuffer } from './geometry.ts';
 import { buildFrame, DEFAULT_FRAME_SETTINGS, type Frame } from './frame.ts';
 import { paintFrame } from './paint.ts';
@@ -19,6 +25,7 @@ import { browserEnvironment, type ChartEnvironment, type ElementSize } from './e
 import {
   clampView,
   DEFAULT_VIEW_LIMITS,
+  isLatestInView,
   normalizeWheelDelta,
   panView,
   wheelAction,
@@ -30,8 +37,8 @@ import {
   beginDrag,
   beginPriceDrag,
   computeCrosshair,
-  dragDelta,
   endDrag,
+  panDragDeltas,
   IDLE_DRAG,
   isInsidePlot,
   isInsidePriceAxis,
@@ -41,10 +48,12 @@ import {
 } from './interaction.ts';
 import {
   AUTO_PRICE_SCALE,
+  clampPriceRangeCenter,
   priceDragFactor,
   priceScaleLimits,
   priceWheelFactor,
   scalePriceRange,
+  translatePriceRange,
   type PriceScaleMode,
 } from './price-scale-state.ts';
 import type { PriceRange } from './price-scale.ts';
@@ -63,6 +72,37 @@ export interface FumeChartOptions {
   /** Initial empty slots right of the latest bar after data is set. Default 6. */
   rightOffset?: number;
   theme?: Partial<ChartTheme>;
+  /**
+   * Called once when the visible range approaches the oldest loaded bar. No further calls happen
+   * until the host answers with prependBars() or resolveOlderDataRequest().
+   */
+  onNeedsOlderData?: (request: OlderDataRequest) => void;
+  /**
+   * Called when the live-follow state or the plot's position changes (after a repaint). Hosts use
+   * it to show a "go to latest" control while the latest bar is out of view.
+   */
+  onFollowingLatestChange?: (state: FollowingLatestState) => void;
+}
+
+/** Live-follow state plus where the plot's bottom-right corner is (for placing a control). */
+export interface FollowingLatestState {
+  following: boolean;
+  /** Distances (CSS px) from the container's right and bottom edges to the plot's corner. */
+  plotCorner: { right: number; bottom: number };
+}
+
+/** Sent by onNeedsOlderData: load bars that start before `before` (the oldest loaded start). */
+export interface OlderDataRequest {
+  before: UnixMs;
+}
+
+export type OlderDataState = 'idle' | 'pending' | 'exhausted';
+
+export interface PrependOptions {
+  /** A replacement time scale that also covers the older bars (e.g. an extended calendar). */
+  timeScale?: TimeScaleMapping;
+  /** false: the oldest data has been reached; no further older-data requests. Default true. */
+  hasMore?: boolean;
 }
 
 /** Everything that describes one series. Replaced atomically by setData(). */
@@ -80,6 +120,9 @@ export interface ChartData {
 type PointerLike = { offsetX: number; offsetY: number; pointerId: number; button: number };
 
 const MIN_PRICE_AXIS_WIDTH = 56;
+/** Request older data when the left edge is within this fraction of a screen of the oldest bar. */
+const OLDER_DATA_LOOKAHEAD = 0.5;
+const OLDER_DATA_MIN_LOOKAHEAD = 10;
 const PRICE_AXIS_PADDING = 18;
 
 export class FumeChart {
@@ -92,8 +135,9 @@ export class FumeChart {
   private readonly disposers: (() => void)[] = [];
   private options: FumeChartOptions;
   private theme: ChartTheme;
-  private bars: readonly Bar[] = [];
-  private series: IndexedSeries = { bars: [], slots: new Float64Array(0), unmappedCount: 0 };
+  private series: MutableSeries = { bars: [], slots: new Float64Array(0), unmappedCount: 0 };
+  private olderData: OlderDataState = 'idle';
+  private lastFollowingReport: string | null = null;
   private priceAxisWidth = MIN_PRICE_AXIS_WIDTH;
   private size: ElementSize = { cssWidth: 0, cssHeight: 0 };
   private pixelRatio = 1;
@@ -170,15 +214,97 @@ export class FumeChart {
       ...(data.barSpacing !== undefined ? { barSpacing: data.barSpacing } : {}),
       ...(data.rightOffset !== undefined ? { rightOffset: data.rightOffset } : {}),
     };
-    this.bars = data.bars;
-    this.reindex();
+    this.reindex(data.bars);
   }
 
   /** Replaces all bars (same time scale) and resets the view to the latest bars. */
   setBars(bars: readonly Bar[]): void {
     if (this.destroyed) return;
-    this.bars = bars;
-    this.reindex();
+    this.reindex(bars);
+  }
+
+  /**
+   * Live update: replaces bars with an existing start and appends newer ones, WITHOUT resetting
+   * zoom, pan, price-scale mode or the crosshair. If the latest bar was on screen the view keeps
+   * following it; if the user has panned back into history the view stays exactly where it is.
+   */
+  upsertBars(bars: readonly Bar[]): MergeResult {
+    if (this.destroyed || bars.length === 0)
+      return { replaced: 0, appended: 0, inserted: 0, unmapped: 0 };
+    const oldLast = this.lastSlot();
+    const following = this.isFollowingLatest();
+    const result = mergeIntoSeries(this.series, bars, this.options.timeScale);
+    const newLast = this.lastSlot();
+    if (oldLast !== null && newLast !== null && newLast > oldLast && !following) {
+      this.shiftAnchor(newLast - oldLast);
+    }
+    this.extendDataRange(bars);
+    this.invalidate('main');
+    return result;
+  }
+
+  /**
+   * Inserts older bars before the loaded series without moving what is on screen: bars are placed
+   * by time-scale slot, and the view is anchored to the latest bar, so visible x positions do not
+   * change. Completes a pending older-data request.
+   */
+  prependBars(bars: readonly Bar[], options: PrependOptions = {}): MergeResult {
+    if (this.destroyed) return { replaced: 0, appended: 0, inserted: 0, unmapped: 0 };
+    if (options.timeScale && options.timeScale !== this.options.timeScale) {
+      // Re-slot everything under the wider mapping. The view is relative to the latest slot, so a
+      // uniform slot shift leaves the picture unchanged.
+      this.options = { ...this.options, timeScale: options.timeScale };
+      this.series = toMutableSeries(indexSeries(this.series.bars, options.timeScale));
+    }
+    const result = mergeIntoSeries(this.series, bars, this.options.timeScale);
+    this.extendDataRange(bars);
+    if (this.olderData === 'pending')
+      this.olderData = options.hasMore === false ? 'exhausted' : 'idle';
+    this.invalidate('main');
+    return result;
+  }
+
+  /**
+   * Completes a pending older-data request without bars (e.g. nothing returned or a failed load).
+   * With hasMore=false no further requests are made until setData().
+   */
+  resolveOlderDataRequest(hasMore: boolean): void {
+    if (this.olderData === 'pending') this.olderData = hasMore ? 'idle' : 'exhausted';
+  }
+
+  /**
+   * True while the latest bar is in view (the live edge). New bars then advance the view; otherwise
+   * the view stays where the user put it. One definition: view-state.ts isLatestInView().
+   */
+  isFollowingLatest(): boolean {
+    if (this.series.slots.length === 0) return true;
+    return isLatestInView(this.view, this.currentPlotWidth());
+  }
+
+  /**
+   * Returns the horizontal view to the live edge (default right offset) keeping the current bar
+   * spacing and the price-scale mode/range. Returns false when already following (no change).
+   */
+  goToLatest(): boolean {
+    if (this.destroyed || this.isFollowingLatest()) return false;
+    const plotWidth = this.currentPlotWidth();
+    const next = {
+      barSpacing: this.view.barSpacing,
+      rightOffset: this.options.rightOffset ?? DEFAULT_FRAME_SETTINGS.rightOffset,
+    };
+    this.view =
+      plotWidth > 0 ? clampView(next, this.viewContext(plotWidth), DEFAULT_VIEW_LIMITS) : next;
+    if (this.drag.active && this.drag.kind === 'pan') this.drag = IDLE_DRAG;
+    this.invalidate('main');
+    return true;
+  }
+
+  getOlderDataState(): OlderDataState {
+    return this.olderData;
+  }
+
+  getBarCount(): number {
+    return this.series.bars.length;
   }
 
   setOptions(options: Partial<FumeChartOptions>): void {
@@ -227,9 +353,14 @@ export class FumeChart {
     }
     const { cssWidth, cssHeight } = this.size;
     if (cssWidth <= 0 || cssHeight <= 0) return;
-    if (this.mainDirty || !this.lastFrame) this.renderMain(cssWidth, cssHeight);
+    const mainRendered = this.mainDirty || !this.lastFrame;
+    if (mainRendered) this.renderMain(cssWidth, cssHeight);
     this.renderOverlay();
     this.mainDirty = false;
+    if (mainRendered) {
+      this.maybeRequestOlderData();
+      this.reportFollowing();
+    }
   }
 
   /** Forces a full repaint of both layers now (measurement helper). */
@@ -281,6 +412,10 @@ export class FumeChart {
     this.lastFrame = null;
     this.crosshair = null;
     this.drag = IDLE_DRAG;
+    this.olderData = 'idle';
+    this.options = { ...this.options };
+    delete this.options.onNeedsOlderData;
+    delete this.options.onFollowingLatestChange;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -354,14 +489,90 @@ export class FumeChart {
     };
   }
 
-  private reindex(): void {
-    this.series = indexSeries(this.bars, this.options.timeScale);
+  private reindex(bars: readonly Bar[] = this.series.bars): void {
+    this.series = toMutableSeries(indexSeries(bars, this.options.timeScale));
     this.priceAxisWidth = this.measurePriceAxisWidth();
     this.lastFrame = null;
+    this.olderData = 'idle';
+    this.lastFollowingReport = null;
     this.resetView();
   }
 
+  private lastSlot(): number | null {
+    const { slots } = this.series;
+    return slots.length > 0 ? slots[slots.length - 1]! : null;
+  }
+
+  private currentPlotWidth(): number {
+    const frame = this.lastFrame;
+    if (frame) return frame.layout.plot.width;
+    return Math.max(0, this.size.cssWidth - Math.min(this.priceAxisWidth, this.size.cssWidth));
+  }
+
+  /** Reports live-follow state / control position changes to the host (after a repaint). */
+  private reportFollowing(): void {
+    const handler = this.options.onFollowingLatestChange;
+    const frame = this.lastFrame;
+    if (!handler || !frame) return;
+    const { layout } = frame;
+    const state: FollowingLatestState = {
+      following: this.isFollowingLatest(),
+      plotCorner: {
+        right: layout.width - (layout.plot.x + layout.plot.width),
+        bottom: layout.height - (layout.plot.y + layout.plot.height),
+      },
+    };
+    const key = JSON.stringify(state);
+    if (key === this.lastFollowingReport) return;
+    this.lastFollowingReport = key;
+    handler(state);
+  }
+
+  /** Keeps absolute slot positions fixed when the latest slot advances by `delta`. */
+  private shiftAnchor(delta: number): void {
+    this.view = { ...this.view, rightOffset: this.view.rightOffset - delta };
+    if (this.drag.active && this.drag.kind === 'pan') {
+      this.drag = {
+        ...this.drag,
+        startView: { ...this.drag.startView, rightOffset: this.drag.startView.rightOffset - delta },
+      };
+    }
+  }
+
+  private extendDataRange(bars: readonly Bar[]): void {
+    let grew = false;
+    for (const bar of bars) {
+      if (!this.dataRange) {
+        this.dataRange = { min: bar.low, max: bar.high };
+        grew = true;
+        continue;
+      }
+      if (bar.low < this.dataRange.min) {
+        this.dataRange = { ...this.dataRange, min: bar.low };
+        grew = true;
+      }
+      if (bar.high > this.dataRange.max) {
+        this.dataRange = { ...this.dataRange, max: bar.high };
+        grew = true;
+      }
+    }
+    if (grew) this.priceAxisWidth = this.axisWidthForRange();
+  }
+
+  private maybeRequestOlderData(): void {
+    const handler = this.options.onNeedsOlderData;
+    const frame = this.lastFrame;
+    const { slots, bars } = this.series;
+    if (!handler || !frame || this.olderData !== 'idle' || slots.length === 0) return;
+    const { from, to } = frame.viewport.visibleSlots();
+    const lookahead = Math.max(OLDER_DATA_MIN_LOOKAHEAD, (to - from + 1) * OLDER_DATA_LOOKAHEAD);
+    if (from - slots[0]! > lookahead) return;
+    this.olderData = 'pending';
+    handler({ before: bars[0]!.start });
+  }
+
   /** Axis width from the widest formatted extreme price, measured once per data change. */
+  /** Full scan of the data range (on data replacement), then the axis width from it. */
   private measurePriceAxisWidth(): number {
     let low = Number.POSITIVE_INFINITY;
     let high = Number.NEGATIVE_INFINITY;
@@ -370,11 +581,16 @@ export class FumeChart {
       if (bar.high > high) high = bar.high;
     }
     this.dataRange = low <= high ? { min: low, max: high } : null;
-    if (!(low <= high)) return MIN_PRICE_AXIS_WIDTH;
+    return this.axisWidthForRange();
+  }
+
+  /** Axis width from the widest formatted extreme price of the known data range (no scan). */
+  private axisWidthForRange(): number {
+    if (!this.dataRange) return MIN_PRICE_AXIS_WIDTH;
     this.ctx.font = `${this.theme.fontSize}px ${this.theme.fontFamily}`;
     const widest = Math.max(
-      this.ctx.measureText(this.options.formatPrice(low)).width,
-      this.ctx.measureText(this.options.formatPrice(high)).width,
+      this.ctx.measureText(this.options.formatPrice(this.dataRange.min)).width,
+      this.ctx.measureText(this.options.formatPrice(this.dataRange.max)).width,
     );
     return Math.max(MIN_PRICE_AXIS_WIDTH, Math.ceil(widest + PRICE_AXIS_PADDING));
   }
@@ -413,7 +629,8 @@ export class FumeChart {
     const pointer = { pointerId: e.pointerId, x: e.offsetX, y: e.offsetY, button: e.button };
     let next = this.drag;
     if (isInsidePlot(frame, e.offsetX, e.offsetY)) {
-      next = beginDrag(this.drag, pointer, this.view);
+      const manualRange = this.priceScale.mode === 'manual' ? this.priceScale.range : null;
+      next = beginDrag(this.drag, pointer, this.view, manualRange);
     } else if (isInsidePriceAxis(frame, e.offsetX, e.offsetY) && frame.priceScale) {
       next = beginPriceDrag(
         this.drag,
@@ -441,13 +658,30 @@ export class FumeChart {
     const drag = this.drag;
     if (frame && drag.active && drag.pointerId === e.pointerId) {
       if (drag.kind === 'pan') {
-        const dx = dragDelta(drag, { pointerId: e.pointerId, x: e.offsetX }) ?? 0;
+        const { dx, dy } = panDragDeltas(drag, {
+          pointerId: e.pointerId,
+          x: e.offsetX,
+          y: e.offsetY,
+        }) ?? {
+          dx: 0,
+          dy: 0,
+        };
         this.view = panView(
           drag.startView,
           dx,
           this.viewContext(frame.layout.plot.width),
           DEFAULT_VIEW_LIMITS,
         );
+        // MANUAL price mode: the same drag also translates the price window (span unchanged).
+        if (drag.startRange && this.priceScale.mode === 'manual') {
+          this.priceScale = {
+            mode: 'manual',
+            range: clampPriceRangeCenter(
+              translatePriceRange(drag.startRange, dy, frame.layout.plot.height),
+              this.dataRange,
+            ),
+          };
+        }
       } else {
         const dy = priceDragDelta(drag, { pointerId: e.pointerId, y: e.offsetY }) ?? 0;
         this.priceScale = {

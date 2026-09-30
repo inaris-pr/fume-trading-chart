@@ -1,4 +1,13 @@
-export { FumeChart, type FumeChartOptions, type ChartData } from './chart.ts';
+export {
+  FumeChart,
+  type ChartData,
+  type FollowingLatestState,
+  type FumeChartOptions,
+  type OlderDataRequest,
+  type OlderDataState,
+  type PrependOptions,
+} from './chart.ts';
+export type { MergeResult } from './series.ts';
 export type { ChartTheme } from './theme.ts';
 export { DEFAULT_THEME } from './theme.ts';
 export type { ChartEnvironment, ElementSize } from './environment.ts';

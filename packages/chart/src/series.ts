@@ -58,3 +58,89 @@ function firstIndexWhere(values: Float64Array, predicate: (value: number) => boo
   }
   return lo;
 }
+
+/** A series the chart owns and updates incrementally. */
+export interface MutableSeries {
+  bars: Bar[];
+  slots: Float64Array;
+  unmappedCount: number;
+}
+
+export function toMutableSeries(series: IndexedSeries): MutableSeries {
+  return { bars: [...series.bars], slots: series.slots, unmappedCount: series.unmappedCount };
+}
+
+/** Index of the bar whose slot equals `slot` exactly, or -1 (binary search). */
+export function exactSlotIndex(slots: Float64Array, slot: number): number {
+  let lo = 0;
+  let hi = slots.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const value = slots[mid]!;
+    if (value === slot) return mid;
+    if (value < slot) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return -1;
+}
+
+export interface MergeResult {
+  replaced: number;
+  appended: number;
+  inserted: number;
+  unmapped: number;
+}
+
+/**
+ * Merges bars into the series by slot (i.e. by canonical start time):
+ * - a bar whose slot already exists replaces it in place (O(log n), no allocation);
+ * - bars after the last slot are appended (one allocation for the batch);
+ * - anything else (older bars, gap fills) triggers one ordered rebuild of the series.
+ * Within one batch, a later bar with the same start wins.
+ */
+export function mergeIntoSeries(
+  series: MutableSeries,
+  bars: readonly Bar[],
+  mapping: TimeScaleMapping,
+): MergeResult {
+  const result: MergeResult = { replaced: 0, appended: 0, inserted: 0, unmapped: 0 };
+  const additions = new Map<number, Bar>();
+  for (const bar of bars) {
+    const slot = mapping.toSlot(bar.start);
+    if (slot === null) {
+      result.unmapped++;
+      continue;
+    }
+    const index = exactSlotIndex(series.slots, slot);
+    if (index >= 0) {
+      series.bars[index] = bar;
+      result.replaced++;
+    } else {
+      additions.set(slot, bar);
+    }
+  }
+  series.unmappedCount += result.unmapped;
+  if (additions.size === 0) return result;
+
+  const added = [...additions.entries()].sort((a, b) => a[0] - b[0]);
+  const last = series.slots.length > 0 ? series.slots[series.slots.length - 1]! : -Infinity;
+  if (added[0]![0] > last) {
+    const slots = new Float64Array(series.slots.length + added.length);
+    slots.set(series.slots);
+    added.forEach(([slot, bar], i) => {
+      slots[series.slots.length + i] = slot;
+      series.bars.push(bar);
+    });
+    series.slots = slots;
+    result.appended = added.length;
+    return result;
+  }
+
+  const merged: [number, Bar][] = series.bars.map((bar, i) => [series.slots[i]!, bar]);
+  merged.push(...added);
+  merged.sort((a, b) => a[0] - b[0]);
+  series.bars = merged.map(([, bar]) => bar);
+  series.slots = Float64Array.from(merged, ([slot]) => slot);
+  result.inserted = added.length;
+  return result;
+}

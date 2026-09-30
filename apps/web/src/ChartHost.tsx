@@ -1,51 +1,86 @@
-import { useEffect, useRef } from 'react';
-import { FumeChart, type ChartData } from '@fume/chart';
+import { useEffect, useRef, useState } from 'react';
+import { FumeChart, type FollowingLatestState } from '@fume/chart';
+import type { MarketDataProvider, TimeframeId } from '@fume/core';
+import { LiveChartController } from './live/chart-controller.ts';
 
 export interface ChartHostProps {
-  /** One series: bars, time scale, formatters, tick and initial view. Replaced atomically. */
-  data: ChartData;
+  provider: MarketDataProvider;
+  symbol: string;
+  timeframe: TimeframeId;
 }
 
 /**
- * Hosts the framework-independent FumeChart. React only provides the container, creates and
- * destroys the engine, and hands it new data. Zoom, pan, crosshair, sizing and rendering all live
- * in the engine; none of it goes through React state.
+ * Hosts the framework-independent FumeChart and the framework-free LiveChartController. React only
+ * provides the container, creates/destroys both, and forwards symbol/timeframe selections. Candle
+ * math, live updates, zoom, pan, crosshair and rendering never go through React state.
  */
-export function ChartHost({ data }: ChartHostProps) {
+export function ChartHost({ provider, symbol, timeframe }: ChartHostProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const controllerRef = useRef<LiveChartController | null>(null);
   const chartRef = useRef<FumeChart | null>(null);
-  const appliedRef = useRef<ChartData | null>(null);
-  const latestData = useRef(data);
-  latestData.current = data;
+  // Only changes when the live-follow state or the plot corner moves (rare), not per frame.
+  const [follow, setFollow] = useState<FollowingLatestState | null>(null);
+  const shownRef = useRef<{ symbol: string; timeframe: TimeframeId } | null>(null);
+  const latest = useRef({ symbol, timeframe });
+  latest.current = { symbol, timeframe };
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const initial = latestData.current;
+    // Placeholder formatters/mapping until the first series arrives through setData().
     const chart = new FumeChart(container, {
-      timeScale: initial.timeScale,
-      formatPrice: initial.formatPrice,
-      formatTime: initial.formatTime,
-      minPriceStep: initial.minPriceStep,
+      timeScale: { toSlot: () => null, slotStart: (s) => s, boundaries: () => [] },
+      formatPrice: (p) => p.toFixed(2),
+      formatTime: () => '',
+      minPriceStep: 0.01,
     });
-    chart.setData(initial);
+    const controller = new LiveChartController({ provider, chart });
+    chart.setOptions({
+      onNeedsOlderData: (request) => void controller.requestOlderData(request),
+      onFollowingLatestChange: setFollow,
+    });
+    controllerRef.current = controller;
     chartRef.current = chart;
-    appliedRef.current = initial;
-    // Dev-only QA handle (stripped from production builds): read engine state from the console.
-    if (import.meta.env.DEV) (window as unknown as { __fumeChart?: FumeChart }).__fumeChart = chart;
+    const { symbol: s, timeframe: tf } = latest.current;
+    shownRef.current = { symbol: s, timeframe: tf };
+    void controller.select(s, tf);
+    // Dev-only QA handles (stripped from production builds).
+    if (import.meta.env.DEV)
+      Object.assign(window, { __fumeChart: chart, __fumeController: controller });
     return () => {
+      controller.dispose();
       chart.destroy();
+      controllerRef.current = null;
       chartRef.current = null;
-      appliedRef.current = null;
+      shownRef.current = null;
+      setFollow(null);
     };
-  }, []);
+  }, [provider]);
 
   useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart || appliedRef.current === data) return;
-    chart.setData(data);
-    appliedRef.current = data;
-  }, [data]);
+    const controller = controllerRef.current;
+    const shown = shownRef.current;
+    if (!controller || !shown) return;
+    if (shown.symbol !== symbol) void controller.select(symbol, timeframe);
+    else if (shown.timeframe !== timeframe) void controller.setTimeframe(timeframe);
+    shownRef.current = { symbol, timeframe };
+  }, [symbol, timeframe]);
 
-  return <div ref={containerRef} className="chart-host" data-testid="fume-chart" />;
+  return (
+    <div className="chart-frame">
+      <div ref={containerRef} className="chart-host" data-testid="fume-chart" />
+      {follow && !follow.following && (
+        <button
+          type="button"
+          className="go-latest"
+          title="Go to latest bar"
+          aria-label="Go to latest bar"
+          style={{ right: follow.plotCorner.right + 10, bottom: follow.plotCorner.bottom + 10 }}
+          onClick={() => chartRef.current?.goToLatest()}
+        >
+          →|
+        </button>
+      )}
+    </div>
+  );
 }

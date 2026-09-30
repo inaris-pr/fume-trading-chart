@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   clampView,
   DEFAULT_VIEW_LIMITS as L,
+  isLatestInView,
   panView,
   rightOffsetBounds,
   wheelAction,
@@ -186,5 +187,20 @@ describe('wheelAction', () => {
     expect(
       wheelAction({ deltaX: Number.NaN, deltaY: 1, deltaMode: 0, ctrlKey: false }, 800),
     ).toBeNull();
+  });
+});
+
+describe('isLatestInView (single live-edge definition)', () => {
+  test('default view follows; panned back or scrolled off does not', () => {
+    expect(isLatestInView({ barSpacing: 7, rightOffset: 6 }, 700)).toBe(true);
+    expect(isLatestInView({ barSpacing: 7, rightOffset: -0.5 }, 700)).toBe(true); // edge, tolerant
+    expect(isLatestInView({ barSpacing: 7, rightOffset: -0.6 }, 700)).toBe(false);
+    expect(isLatestInView({ barSpacing: 7, rightOffset: -40 }, 700)).toBe(false);
+    expect(isLatestInView({ barSpacing: 7, rightOffset: 99.4 }, 700)).toBe(true);
+    expect(isLatestInView({ barSpacing: 7, rightOffset: 99.6 }, 700)).toBe(false);
+  });
+
+  test('degenerate sizes count as following (nothing to return to)', () => {
+    expect(isLatestInView({ barSpacing: 7, rightOffset: -100 }, 0)).toBe(true);
   });
 });

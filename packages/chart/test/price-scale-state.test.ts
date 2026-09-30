@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import {
+  clampPriceRangeCenter,
   priceDragFactor,
   priceScaleLimits,
   priceWheelFactor,
   scalePriceRange,
+  translatePriceRange,
 } from '../src/price-scale-state.ts';
 import { createPriceScale } from '../src/price-scale.ts';
 
@@ -96,5 +98,69 @@ describe('drag and wheel factors', () => {
     expect(priceWheelFactor(1e6)).toBe(2);
     expect(priceWheelFactor(-1e6)).toBe(0.5);
     expect(priceWheelFactor(Number.POSITIVE_INFINITY)).toBe(1);
+  });
+});
+
+describe('translatePriceRange (vertical pan, span preserved)', () => {
+  const H = 400;
+
+  test('drag down moves the window up by dy * span / height; span unchanged', () => {
+    const r = translatePriceRange({ min: 100, max: 110 }, 40, H);
+    expect(r.min).toBeCloseTo(101, 12);
+    expect(r.max - r.min).toBeCloseTo(10, 12);
+    const up = translatePriceRange({ min: 100, max: 110 }, -40, H);
+    expect(up.min).toBeCloseTo(99, 12);
+  });
+
+  test('a price keeps following the pointer: its y moves by exactly dy', () => {
+    const before = createPriceScale({ min: 100, max: 110 }, 0, H);
+    const after = createPriceScale(translatePriceRange({ min: 100, max: 110 }, 37, H), 0, H);
+    expect(after.toY(104.2)).toBeCloseTo(before.toY(104.2) + 37, 9);
+  });
+
+  test('negative, sub-penny, huge and tiny ranges keep a positive, finite, unchanged span', () => {
+    for (const range of [
+      { min: -5.5, max: -1.25 },
+      { min: 0.0141, max: 0.0143 },
+      { min: 1e9, max: 1e9 + 1e6 },
+      { min: 1e-8, max: 3e-8 },
+    ]) {
+      const span = range.max - range.min;
+      for (const dy of [-1e4, -3, 0.5, 250, 1e5]) {
+        const r = translatePriceRange(range, dy, H);
+        expect(Number.isFinite(r.min) && Number.isFinite(r.max)).toBe(true);
+        expect(r.max - r.min).toBeCloseTo(
+          span,
+          Math.max(0, 12 - Math.ceil(Math.log10(Math.abs(r.max) + 1))),
+        );
+      }
+    }
+  });
+
+  test('computed from the start range + total dy: no compounding across many moves', () => {
+    const start = { min: 100, max: 110 };
+    let stepwise = start;
+    for (let i = 0; i < 1000; i++) stepwise = translatePriceRange(stepwise, 0.37, H);
+    const direct = translatePriceRange(start, 370, H);
+    expect(direct.min).toBeCloseTo(100 + 370 * (10 / H), 9);
+    expect(direct.max - direct.min).toBeCloseTo(10, 9);
+    expect(Math.abs(stepwise.min - direct.min)).toBeLessThan(1e-9); // same answer either way
+  });
+
+  test('invalid inputs return the range unchanged', () => {
+    const r = { min: 1, max: 2 };
+    expect(translatePriceRange(r, Number.NaN, H)).toBe(r);
+    expect(translatePriceRange(r, 10, 0)).toBe(r);
+    expect(translatePriceRange({ min: 1, max: 1 }, 10, H)).toEqual({ min: 1, max: 1 });
+  });
+
+  test('clampPriceRangeCenter keeps the window within reach of the data, span unchanged', () => {
+    const data = { min: 100, max: 120 };
+    const far = clampPriceRangeCenter({ min: 10_000, max: 10_010 }, data);
+    expect(far.max - far.min).toBeCloseTo(10, 9);
+    expect((far.min + far.max) / 2).toBeCloseTo(120 + 10 * 10, 9);
+    const near = { min: 105, max: 115 };
+    expect(clampPriceRangeCenter(near, data)).toBe(near);
+    expect(clampPriceRangeCenter(near, null)).toBe(near);
   });
 });

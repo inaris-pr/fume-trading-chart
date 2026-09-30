@@ -113,8 +113,8 @@ describe('dependency tree', () => {
   });
 });
 
-describe('Stage 2 stays offline and provider-neutral', () => {
-  const dirs = ['packages/core/src', 'packages/chart/src', 'apps/web/src'];
+describe('Stages 2-3 stay offline and provider-neutral', () => {
+  const dirs = ['packages/core/src', 'packages/chart/src', 'packages/replay/src', 'apps/web/src'];
   const forbidden = [
     /alpaca/i,
     /\bAPCA\b/,
@@ -123,6 +123,10 @@ describe('Stage 2 stays offline and provider-neutral', () => {
     /\bXMLHttpRequest\b/,
     /\bEventSource\b/,
     /['"`](?:https?|wss?):\/\//,
+    /wrangler/i,
+    /from\s+['"]cloudflare:/,
+    /\bDurableObject\b/,
+    /\bsecret\s*key\b/i,
   ];
 
   // Comments are stripped: Stage 0 doc comments legitimately name Alpaca as an example provider.
@@ -131,7 +135,7 @@ describe('Stage 2 stays offline and provider-neutral', () => {
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/(^|[^:])\/\/.*$/gm, '$1');
 
-  test('no provider names, network calls or endpoints in core, chart or the web shell', () => {
+  test('no provider names, network calls, endpoints, credentials or Worker code in core, chart, replay or web', () => {
     for (const dir of dirs) {
       for (const file of sourceFiles(join(root, dir))) {
         const source = code(file);
@@ -146,6 +150,40 @@ describe('Stage 2 stays offline and provider-neutral', () => {
       const code = read(file);
       expect(code, file).not.toMatch(/\b(QQQ|AAPL|NVDA|TSLA)\b/);
       expect(code, file).not.toMatch(/['"](1m|5m|15m|1h|4h|1d)['"]/);
+    }
+  });
+});
+
+describe('Stage 3 package boundaries', () => {
+  const pkg = (dir: string) =>
+    JSON.parse(read(join(root, dir, 'package.json'))) as Record<
+      string,
+      Record<string, string> | undefined
+    >;
+
+  test('@fume/replay depends only on @fume/core and imports nothing else', () => {
+    const p = pkg('packages/replay');
+    expect(Object.keys({ ...p.dependencies, ...p.peerDependencies })).toEqual(['@fume/core']);
+    for (const file of sourceFiles(join(root, 'packages/replay/src'))) {
+      for (const spec of importsOf(read(file))) {
+        expect(spec, file).toMatch(/^(\.\.?\/|@fume\/core(\/fixtures)?$)/);
+      }
+    }
+  });
+
+  test('core and chart never import the replay provider (or the web app)', () => {
+    for (const dir of ['packages/core/src', 'packages/chart/src']) {
+      for (const file of sourceFiles(join(root, dir))) {
+        for (const spec of importsOf(read(file))) {
+          expect(spec, file).not.toMatch(/@fume\/(replay|web)/);
+        }
+      }
+    }
+  });
+
+  test('the provider adapter lives outside core: core has no MarketDataProvider implementation', () => {
+    for (const file of sourceFiles(join(root, 'packages/core/src'))) {
+      expect(read(file), file).not.toMatch(/implements\s+MarketDataProvider/);
     }
   });
 });

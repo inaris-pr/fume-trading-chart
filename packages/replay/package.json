@@ -1,0 +1,16 @@
+{
+  "name": "@fume/replay",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Deterministic replay MarketDataProvider (synthetic instruments, history and live tape). No network.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fume/core": "workspace:*"
+  }
+}

@@ -1,6 +1,6 @@
 # Chart performance baseline (Stage 1)
 
-Measured 2026-09-29 with the dev-only benchmark page (`/?bench`) against the **production build**
+Measured 2026-09-29 with the benchmark page (`/?bench`, a lazily loaded chunk that exposes no globals) against the **production build**
 (`vite build` + `vite preview`). The page times the synchronous CPU cost of `FumeChart.render()`,
 which covers the frame model plus the Canvas 2D commands. GPU rasterization and compositing are
 not included.
@@ -61,3 +61,25 @@ ranges; times are medians of 60 synchronous calls.
 - **Switching to 1m (66k bars) costs ~80–90 ms once**, dominated by mapping every bar to its slot in
   `setData`. It happens once per switch, not per frame. If it becomes noticeable with real data, the
   first optimization is indexing lazily or in chunks; no architectural change is needed.
+
+## Stage 3 live-path baseline
+
+Measured 2026-09-29 with `/?bench` against the production build (Chromium 152, hidden tab, DPR 1,
+12 cores, stage 977×800 CSS px). Two runs, shown as ranges. `performance.now()` resolution is about
+0.1 ms, so values below that read as 0.0.
+
+| Displayed timeframe | Loaded history | Aggregator: apply one trade + re-fold bucket | + `chart.upsertBars` + repaint |
+| ------------------- | -------------- | -------------------------------------------- | ------------------------------ |
+| 1m                  | 66,159 bars    | < 0.1 ms                                     | 0.3–0.6 ms                     |
+| 5m                  | 13,232 bars    | < 0.1 ms                                     | 0.5–0.6 ms                     |
+| 1h                  | 1,188 bars     | ~0.1 ms                                      | 0.5 ms                         |
+| 4h                  | 340 bars       | 0.0–0.1 ms                                   | 0.6 ms                         |
+| 1d                  | 170 bars       | 0.3–0.5 ms (re-folds up to 390 minutes)      | 0.4–0.6 ms                     |
+
+- A live trade never re-indexes the series: replacing the active candle is a binary search plus
+  one assignment, and appending allocates once per new candle. The per-trade cost is independent of
+  the loaded history (66k 1m bars cost the same as 170 daily bars).
+- The 1D re-fold scans the current session's minutes (≤ 390 in RTH). That is the largest bucket and
+  still well under a millisecond. No incremental fold was needed.
+- Crosshair (overlay-only) repaint stays at 0.1–0.4 ms while live updates run.
+- `setData` for all 66k 1m bars: 36–90 ms once per symbol/timeframe switch (unchanged from Stage 2).
