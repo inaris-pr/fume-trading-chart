@@ -1,52 +1,34 @@
-import { useMemo, useState } from 'react';
-import type { ChartData } from '@fume/chart';
+import { useState } from 'react';
 import type { TimeframeId } from '@fume/core';
+import { isReplaySymbol, REPLAY_SYMBOLS, ReplayMarketDataProvider } from '@fume/replay';
 import { ChartHost } from './ChartHost.tsx';
-import {
-  DEMO_SYMBOLS,
-  DemoCatalog,
-  isDemoSymbol,
-  isTimeframe,
-  TIMEFRAME_LABELS,
-  TIMEFRAME_ORDER,
-  type DemoSymbol,
-} from './demo/catalog.ts';
+import { isTimeframe, TIMEFRAME_LABELS, TIMEFRAME_ORDER } from './timeframes.ts';
 
 /** Initial selection; `?symbol=` / `?tf=` are dev conveniences for QA links, not persistence. */
-function initialSelection(): { symbol: DemoSymbol; timeframe: TimeframeId } {
+function initialSelection(): { symbol: string; timeframe: TimeframeId } {
   const params = new URLSearchParams(window.location.search);
   const symbol = params.get('symbol');
   const timeframe = params.get('tf');
   return {
-    symbol: isDemoSymbol(symbol) ? symbol : 'SPY',
+    symbol: isReplaySymbol(symbol) ? symbol : 'SPY',
     timeframe: isTimeframe(timeframe) ? timeframe : '5m',
   };
 }
 
+/** Replay speed (market ms per real ms); `?speed=` for QA. */
+function replaySpeed(): number {
+  const speed = Number(new URLSearchParams(window.location.search).get('speed'));
+  return Number.isFinite(speed) && speed > 0 && speed <= 3600 ? speed : 20;
+}
+
 export function App() {
-  const [catalog] = useState(() => new DemoCatalog());
+  const [provider] = useState(() => new ReplayMarketDataProvider({ speed: replaySpeed() }));
   const [selection, setSelection] = useState(initialSelection);
-  const series = useMemo(
-    () => catalog.get(selection.symbol, selection.timeframe),
-    [catalog, selection.symbol, selection.timeframe],
-  );
-  const chartData = useMemo<ChartData>(
-    () => ({
-      bars: series.bars,
-      timeScale: series.timeScale,
-      formatPrice: series.formatPrice,
-      formatTime: series.formatTime,
-      minPriceStep: series.minPriceStep,
-      barSpacing: series.barSpacing,
-      rightOffset: series.rightOffset,
-    }),
-    [series],
-  );
-  const symbolOptions: readonly DemoSymbol[] = (DEMO_SYMBOLS as readonly DemoSymbol[]).includes(
+  const symbolOptions: readonly string[] = (REPLAY_SYMBOLS as readonly string[]).includes(
     selection.symbol,
   )
-    ? DEMO_SYMBOLS
-    : [...DEMO_SYMBOLS, selection.symbol];
+    ? REPLAY_SYMBOLS
+    : [...REPLAY_SYMBOLS, selection.symbol];
 
   return (
     <div className="app">
@@ -59,7 +41,7 @@ export function App() {
             value={selection.symbol}
             onChange={(e) => {
               const symbol = e.target.value;
-              if (isDemoSymbol(symbol)) setSelection((s) => ({ ...s, symbol }));
+              if (isReplaySymbol(symbol)) setSelection((s) => ({ ...s, symbol }));
             }}
           >
             {symbolOptions.map((symbol) => (
@@ -82,12 +64,12 @@ export function App() {
           ))}
         </div>
         <span className="meta">RTH</span>
-        <span className="feed" title={series.instrument.description}>
-          Replay data · not live
+        <span className="feed" title="Deterministic synthetic replay data. Not real market data.">
+          Replay · not live
         </span>
       </header>
       <main className="chart-area">
-        <ChartHost data={chartData} />
+        <ChartHost provider={provider} symbol={selection.symbol} timeframe={selection.timeframe} />
       </main>
     </div>
   );

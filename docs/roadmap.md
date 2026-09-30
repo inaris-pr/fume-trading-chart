@@ -1,5 +1,15 @@
 # Roadmap, acceptance criteria, tests, risks
 
+## Roadmap correction (Stage 3, 2026-09-29)
+
+Stage 2 delivered canonical historical aggregation (1m → 5m/15m/1h/4h/1d, session-aligned) earlier than planned. Stage 3 completed the rest of the planned Stage 3 foundation **before** any real provider:
+
+- exact `EventTime` helpers; trade-by-trade live aggregation with official/revised minute reconciliation;
+- the deterministic `ReplayMarketDataProvider` (`@fume/replay`) with an injectable scheduler;
+- incremental chart updates (`upsertBars`) that keep the user's view, older-history `prependBars` without a jump, and the `onNeedsOlderData` signal that Stage 4 pagination will use.
+
+Stage 4 is unchanged: Worker + Alpaca historical adapter + real historical bars. Later stages are not renumbered.
+
 ## Changes from the original stage plan
 
 | Change                                                                                                                                                                                                                                                   | Reason                                                                                                                                                                         |

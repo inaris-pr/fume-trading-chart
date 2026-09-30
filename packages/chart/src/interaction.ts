@@ -15,7 +15,19 @@ import type { ViewState } from './view-state.ts';
 
 export type DragState =
   | { active: false }
-  | { active: true; kind: 'pan'; pointerId: number; startX: number; startView: ViewState }
+  | {
+      active: true;
+      kind: 'pan';
+      pointerId: number;
+      startX: number;
+      startY: number;
+      startView: ViewState;
+      /**
+       * MANUAL price range at drag start, or null in AUTO mode. Non-null enables vertical
+       * translation: the plot drag then moves both time (dx) and price (dy).
+       */
+      startRange: PriceRange | null;
+    }
   | {
       active: true;
       kind: 'price';
@@ -29,11 +41,15 @@ export type DragState =
 
 export const IDLE_DRAG: DragState = { active: false };
 
-/** Starts a pan for the primary button only; any other state is kept. */
+/**
+ * Starts a plot drag for the primary button only; any other state is kept. Pass the MANUAL price
+ * range to make it a 2D drag; in AUTO mode (null) the drag pans time only.
+ */
 export function beginDrag(
   state: DragState,
-  pointer: { pointerId: number; x: number; button: number },
+  pointer: { pointerId: number; x: number; y?: number; button: number },
   view: ViewState,
+  manualRange: PriceRange | null = null,
 ): DragState {
   if (state.active || pointer.button !== 0) return state;
   return {
@@ -41,8 +57,19 @@ export function beginDrag(
     kind: 'pan',
     pointerId: pointer.pointerId,
     startX: pointer.x,
+    startY: pointer.y ?? 0,
     startView: view,
+    startRange: manualRange,
   };
+}
+
+/** Total movement since the plot drag started, or null if not dragging this pointer. */
+export function panDragDeltas(
+  state: DragState,
+  pointer: { pointerId: number; x: number; y: number },
+): { dx: number; dy: number } | null {
+  if (!state.active || state.kind !== 'pan' || state.pointerId !== pointer.pointerId) return null;
+  return { dx: pointer.x - state.startX, dy: pointer.y - state.startY };
 }
 
 /** Starts a price-axis scaling drag for the primary button only; any other state is kept. */

@@ -167,3 +167,14 @@ function viewportFor(view: ViewState, ctx: ViewContext) {
 function clamp(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
 }
+
+/**
+ * The single live-edge definition: the latest bar's slot center is inside the plot (with half a
+ * slot of tolerance on either side). It decides whether appended bars advance the view, whether
+ * the "go to latest" control is shown, and whether goToLatest() has anything to do.
+ */
+export function isLatestInView(view: ViewState, plotWidth: number): boolean {
+  if (!(plotWidth > 0) || !(view.barSpacing > 0)) return true;
+  const slotsOnScreen = plotWidth / view.barSpacing;
+  return view.rightOffset >= -0.5 && view.rightOffset <= slotsOnScreen - 0.5;
+}

@@ -78,3 +78,44 @@ export function priceWheelFactor(dyPx: number): number {
 function clamp(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
 }
+
+/**
+ * Translates a price range vertically by a pointer movement of `dyPx` CSS px on a plot
+ * `plotHeightPx` tall, WITHOUT changing its span (translation, not scaling). Uses the same linear
+ * price <-> y relation as createPriceScale(): one pixel is (max - min) / plotHeight in price.
+ * Dragging down (dy > 0) moves candles down, i.e. the visible window moves up to higher prices.
+ * Callers pass the range at drag START and the TOTAL dy, so repeated moves never compound error.
+ */
+export function translatePriceRange(
+  range: PriceRange,
+  dyPx: number,
+  plotHeightPx: number,
+): PriceRange {
+  const span = range.max - range.min;
+  if (!(span > 0) || !Number.isFinite(span) || !(plotHeightPx > 0) || !Number.isFinite(dyPx)) {
+    return range;
+  }
+  const shift = (dyPx * span) / plotHeightPx;
+  const min = range.min + shift;
+  return Number.isFinite(min) ? { min, max: min + span } : range;
+}
+
+/**
+ * Keeps a manually positioned window within reach of the data: its center may move at most
+ * `reach` spans beyond the data's low/high. Span is unchanged. Without data, returns `range`.
+ */
+export function clampPriceRangeCenter(
+  range: PriceRange,
+  dataRange: PriceRange | null,
+  reach = 10,
+): PriceRange {
+  if (!dataRange) return range;
+  const span = range.max - range.min;
+  const center = (range.min + range.max) / 2;
+  const lo = dataRange.min - reach * span;
+  const hi = dataRange.max + reach * span;
+  const clamped = center < lo ? lo : center > hi ? hi : center;
+  if (clamped === center) return range;
+  const min = clamped - span / 2;
+  return { min, max: min + span };
+}

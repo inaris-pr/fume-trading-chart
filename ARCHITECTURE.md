@@ -63,9 +63,11 @@ Browser (single user)                          Cloudflare                       
 ```
 fume-trading-chart/
 ├─ packages/
-│  ├─ core/      @fume/core: domain types, provider ports, and later the pure logic
-│  │             (candle aggregation, order state machine, P&L). No DOM, no provider code.
-│  └─ chart/     @fume/chart: Canvas chart engine (Stage 1). Depends on nothing provider-specific.
+│  ├─ core/      @fume/core: domain types, provider ports and the pure logic (sessions,
+│  │             time scale, canonical + live candle aggregation, EventTime; later the order
+│  │             state machine and P&L). No DOM, no provider code.
+│  ├─ chart/     @fume/chart: Canvas chart engine (Stage 1). Depends on nothing provider-specific.
+│  └─ replay/    @fume/replay: deterministic ReplayMarketDataProvider (Stage 3). Offline.
 ├─ apps/
 │  ├─ web/       Vite + React shell: <ChartHost>, order panel, FumeClient (Stage 1+)
 │  └─ worker/    Cloudflare Worker + StreamHub DO + provider adapters (Stage 4+)
@@ -80,7 +82,8 @@ Only `packages/core` exists after Stage 0. Other folders are created in the stag
 
 - `core` → nothing.
 - `chart` → `core`, **type-only** (approved at Stage 1 review, 2026-09-29). `@fume/chart` may `import type` canonical domain contracts from `@fume/core`, such as `Bar`, `TimeScaleMapping` and the formatter/domain types, so the chart consumes the Stage 0 model instead of a second candle model. It must **not** gain a runtime dependency on `@fume/core`: no value imports, and `@fume/core` stays a `devDependency` of the chart package, used only for type resolution. Changing this needs an explicit architecture review. Enforced by `test/boundaries.test.ts`.
-- `web` → `core`, `chart`.
+- `replay` → `core` (runtime). A provider adapter; it implements the core `MarketDataProvider` port. Core and chart never import it.
+- `web` → `core`, `chart`, `replay`.
 - `worker` → `core`.
 - Nothing imports from `worker/src/providers/*` except the Worker's composition root.
 
@@ -184,6 +187,35 @@ The overlay receives all pointer, wheel and double-click events; the main canvas
 | Container resize / DPR change          | AUTO refits; MANUAL keeps the same price range over the new height |
 | Symbol or timeframe switch (`setData`) | Reset to AUTO                                                      |
 | Double-click on the price axis         | Reset to AUTO                                                      |
+
+### 4.3 Live data path (Stage 3, replay)
+
+```
+MarketDataProvider (replay now, Alpaca in Stage 4/5)
+  │ openStream → MarketEvent[] (trade, bar final/revised/provisional, status)
+  ▼
+LiveChartController (apps/web, framework-free)        getBars / getSessions (1m history)
+  │ subscribe + buffer → load history → applyBufferedHandoff → live
+  ▼
+LiveCandleAggregator (@fume/core, pure)
+  │ minute state: official > provider provisional > trade-built
+  │ foldBuckets(displayed timeframe) → canonical upserts (aggregateBars)
+  ▼
+FumeChart.upsertBars / setData / prependBars (@fume/chart)
+```
+
+- **Timestamps** are exact: `EventTime.ns` is parsed from RFC 3339 with BigInt and compared as canonical strings (`event-time.ts`); trade order is `(time.ns, ingestSeq)`.
+- **The aggregator** keeps minute state for a bounded window (2 × 1440 minute slots behind the newest event), de-duplicates trades by `venue + tradeId` in a bounded set (10,000), and re-folds only the canonical buckets that contain changed minutes. Buckets that start before the seeded/retained coverage are never re-folded; late events for pruned minutes are dropped and counted (`diagnostics()`).
+- **Timeframe switches** re-aggregate the same minute state with `aggregateBars` (no resubscription). **Symbol switches** resubscribe and rebuild through the handoff.
+
+### 4.4 Incremental chart updates and history loading (Stage 3)
+
+| API                                           | Behavior                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setData(data)`                               | Replaces the series atomically; resets view (latest bars, default spacing), price scale (AUTO), crosshair and the older-data state. Used for symbol/timeframe switches.                                                                                                                                                                                                       |
+| `upsertBars(bars)`                            | Live updates. Same start → replaced in place (binary search, no allocation); later start → appended. Zoom, pan, MANUAL price scale and the crosshair pointer are kept. **Live edge:** if the latest bar was on screen, the view follows the new bar; if the user panned back, `rightOffset` shifts by the slot delta so nothing on screen moves (also while dragging).        |
+| `prependBars(bars, { hasMore?, timeScale? })` | Older history. Bars are placed by time-scale slot and the view is anchored to the latest slot, so visible x positions do not change; an optional wider `timeScale` re-slots everything under the same anchor. Completes a pending older-data request.                                                                                                                         |
+| `onNeedsOlderData({ before })` option         | Fires once after a main repaint when the left edge of the view is within half a screen (≥ 10 slots) of the oldest bar. State then stays `pending` until `prependBars` (→ `idle`, or `exhausted` with `hasMore: false`) or `resolveOlderDataRequest(hasMore)`. A resolve without bars does not re-trigger immediately (no request storms); the next interaction may ask again. |
 
 **Performance rule:** each frame draws only the visible bars. Updating the live bar redraws the frame, but no layout is recomputed unless the viewport changed. Updates are batched through `requestAnimationFrame`.
 

@@ -1,16 +1,26 @@
 /**
- * Dev-only render benchmark (open /?bench). Measures the synchronous CPU cost of the chart's
- * layers on SPY 1-minute demo data: full repaint (frame model + candles), overlay-only repaint
- * (crosshair move), and full repaint at maximum zoom-out. GPU rasterization is not included.
+ * Dev-only benchmark (open /?bench). Synchronous CPU cost of:
+ * 1. chart layers on SPY 1-minute replay history (full repaint, overlay-only, max zoom-out);
+ * 2. the LIVE path per trade: aggregator apply + canonical re-fold, chart upsert + repaint.
+ * GPU rasterization is not included. Frames are scheduled with setTimeout so it runs in a hidden tab.
  */
 import { FumeChart, type ChartEnvironment } from '@fume/chart';
-import { DemoCatalog } from './demo/catalog.ts';
+import {
+  addNs,
+  aggregateBars,
+  createPriceFormatter,
+  createSessionTimeScale,
+  createTimeFormatter,
+  epochMsToNs,
+  eventTimeFromNs,
+  LiveCandleAggregator,
+  slotSpecForTimeframe,
+  type Bar,
+  type MarketEvent,
+  type TimeframeId,
+} from '@fume/core';
+import { ReplayDataset } from '@fume/replay';
 
-/**
- * Benchmark environment: sizes the canvas synchronously from layout and schedules frames with
- * setTimeout, so the run also works in a background/hidden tab where requestAnimationFrame and
- * ResizeObserver callbacks are paused. Rendering itself is the production code path.
- */
 const benchEnvironment: ChartEnvironment = {
   createCanvas: (container) => container.ownerDocument.createElement('canvas'),
   devicePixelRatio: () => window.devicePixelRatio || 1,
@@ -23,23 +33,13 @@ const benchEnvironment: ChartEnvironment = {
   watchPixelRatio: () => () => {},
 };
 
-interface Row {
-  bars: number;
-  setDataMs: number;
-  fullMedianMs: number;
-  overlayMedianMs: number;
-  zoomedOutCandles: number;
-  zoomedOutMedianMs: number;
-}
-
-const SIZES = [1_000, 10_000, Number.POSITIVE_INFINITY] as const;
 const RUNS = 60;
-
+const MIN = 60_000;
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-function median(fn: () => void): number {
+function median(fn: () => void, runs = RUNS): number {
   const samples: number[] = [];
-  for (let i = 0; i < RUNS; i++) {
+  for (let i = 0; i < runs; i++) {
     const t = performance.now();
     fn();
     samples.push(performance.now() - t);
@@ -50,45 +50,102 @@ function median(fn: () => void): number {
 
 export async function runBenchmark(root: HTMLElement): Promise<void> {
   root.innerHTML =
-    '<div class="bench"><h3>Fume render benchmark</h3><div class="bench-stage"></div><pre id="bench-results">running…</pre></div>';
+    '<div class="bench"><h3>Fume benchmark</h3><div class="bench-stage"></div><pre id="bench-results">running…</pre></div>';
   const stage = root.querySelector<HTMLDivElement>('.bench-stage')!;
   const output = root.querySelector<HTMLPreElement>('#bench-results')!;
-  const catalog = new DemoCatalog();
-  const spy = catalog.get('SPY', '1m');
-  const rows: Row[] = [];
+  const dataset = new ReplayDataset();
+  const instrument = dataset.instrument('SPY')!;
+  const allMinutes = dataset.minuteBars('SPY').filter((b) => b.start < dataset.replayStartMs);
+  const sessions = dataset.dataSessions;
+  const mapping = (tf: TimeframeId) =>
+    createSessionTimeScale({ sessions, sessionMode: 'regular', slot: slotSpecForTimeframe(tf) });
+  const common = {
+    formatPrice: createPriceFormatter(instrument.priceFormat),
+    formatTime: createTimeFormatter(instrument.session.timezone),
+    minPriceStep: 0.01,
+  };
+  const render: string[] = [];
+  const live: string[] = [];
 
-  for (const size of SIZES) {
-    const bars = Number.isFinite(size) ? spy.bars.slice(-size) : spy.bars;
-    const chart = new FumeChart(stage, spy, benchEnvironment);
+  // 1. Rendering on 1k / 10k / all 1m bars.
+  for (const size of [1_000, 10_000, Number.POSITIVE_INFINITY]) {
+    const bars = Number.isFinite(size) ? allMinutes.slice(-size) : allMinutes;
+    const chart = new FumeChart(stage, { ...common, timeScale: mapping('1m') }, benchEnvironment);
     await tick();
     let t = performance.now();
-    chart.setData({ ...spy, bars });
+    chart.setData({ ...common, bars, timeScale: mapping('1m') });
     const setDataMs = performance.now() - t;
     chart.renderAll();
-    const fullMedianMs = median(() => chart.renderAll());
-
-    // Put the crosshair in the middle of the plot, then time overlay-only repaints.
-    const overlay = stage.querySelectorAll('canvas')[1]!;
-    const rect = overlay.getBoundingClientRect();
+    const full = median(() => chart.renderAll());
+    const overlayCanvas = stage.querySelectorAll('canvas')[1]!;
+    const rect = overlayCanvas.getBoundingClientRect();
     const at = { clientX: rect.left + rect.width * 0.5, clientY: rect.top + rect.height * 0.5 };
-    overlay.dispatchEvent(new PointerEvent('pointermove', { ...at, pointerId: 1 }));
-    const overlayMedianMs = median(() => chart.renderOverlayOnly());
-
-    // Zoom out to the minimum bar spacing with wheel events at the plot center.
-    for (let i = 0; i < 12; i++) {
-      overlay.dispatchEvent(new WheelEvent('wheel', { ...at, deltaY: 1000, cancelable: true }));
-    }
+    overlayCanvas.dispatchEvent(new PointerEvent('pointermove', { ...at, pointerId: 1 }));
+    const overlay = median(() => chart.renderOverlayOnly());
+    for (let i = 0; i < 12; i++)
+      overlayCanvas.dispatchEvent(
+        new WheelEvent('wheel', { ...at, deltaY: 1000, cancelable: true }),
+      );
     chart.renderAll();
-    const zoomedOutCandles = chart.getLastFrame()!.candles.count;
-    const zoomedOutMedianMs = median(() => chart.renderAll());
-    rows.push({
-      bars: bars.length,
-      setDataMs,
-      fullMedianMs,
-      overlayMedianMs,
-      zoomedOutCandles,
-      zoomedOutMedianMs,
-    });
+    const zoomed = median(() => chart.renderAll());
+    render.push(
+      `${String(bars.length).padEnd(7)} setData ${setDataMs.toFixed(1).padStart(6)} ms | full ${full.toFixed(2)} ms | overlay ${overlay.toFixed(2)} ms | max zoom-out (${chart.getLastFrame()!.candles.count} candles) ${zoomed.toFixed(2)} ms`,
+    );
+    chart.destroy();
+    await tick();
+  }
+
+  // 2. Live path: one trade at a time into the current minute, with the full 1m history loaded.
+  for (const tf of ['1m', '5m', '1h', '4h', '1d'] as const) {
+    const target = mapping(tf);
+    const minuteScale = mapping('1m');
+    const history =
+      tf === '1m'
+        ? allMinutes
+        : aggregateBars({ bars: allMinutes, sourceDurationMs: MIN, target }).bars;
+    const chart = new FumeChart(stage, { ...common, timeScale: target }, benchEnvironment);
+    await tick();
+    chart.setData({ ...common, bars: history, timeScale: target });
+    chart.renderAll();
+    const agg = new LiveCandleAggregator({ instrumentId: instrument.id, minuteScale });
+    const lastSession = sessions.findIndex((s) =>
+      s.windows.some(
+        (w) => w.start <= allMinutes.at(-1)!.start && w.end > allMinutes.at(-1)!.start,
+      ),
+    );
+    const seedFrom = sessions[lastSession - 1]!.windows.find((w) => w.kind === 'regular')!.start;
+    agg.seedOfficialMinutes(
+      allMinutes.filter((b: Bar) => b.start >= seedFrom),
+      seedFrom,
+    );
+    const minuteStart = dataset.replayStartMs;
+    let seq = 0;
+    let price = allMinutes.at(-1)!.close;
+    const makeTrade = (): MarketEvent => {
+      price = Math.round((price + (seq % 2 ? 0.01 : -0.01)) * 100) / 100;
+      const ns = addNs(epochMsToNs(minuteStart), BigInt(1_000_000 + seq * 10_000));
+      return {
+        kind: 'trade',
+        trade: {
+          instrumentId: instrument.id,
+          time: eventTimeFromNs(ns),
+          price,
+          size: 10,
+          ingestSeq: seq++,
+        },
+      };
+    };
+    let upserts: Bar[] = [];
+    const aggMs = median(() => {
+      upserts = agg.foldBuckets(target, agg.apply([makeTrade()]));
+    }, 400);
+    const chartMs = median(() => {
+      chart.upsertBars(agg.foldBuckets(target, agg.apply([makeTrade()])));
+      chart.render();
+    }, 400);
+    live.push(
+      `${tf.padEnd(3)} history ${String(history.length).padStart(6)} bars | aggregator apply+fold ${aggMs.toFixed(3)} ms | apply+fold+chart upsert+repaint ${chartMs.toFixed(3)} ms | upserts/trade ${upserts.length}`,
+    );
     chart.destroy();
     await tick();
   }
@@ -99,15 +156,13 @@ export async function runBenchmark(root: HTMLElement): Promise<void> {
     hardwareConcurrency: navigator.hardwareConcurrency,
     stage: `${stage.clientWidth}x${stage.clientHeight} CSS px`,
   };
-  const fmt = (n: number) => n.toFixed(2).padStart(9);
   output.textContent = [
     JSON.stringify(environment, null, 2),
     '',
-    'bars     setData(ms) full(ms)  overlay(ms) zoomedOut:candles full(ms)',
-    ...rows.map(
-      (r) =>
-        `${String(r.bars).padEnd(8)}${fmt(r.setDataMs)}${fmt(r.fullMedianMs)}${fmt(r.overlayMedianMs)}   ${String(r.zoomedOutCandles).padStart(8)}${fmt(r.zoomedOutMedianMs)}`,
-    ),
+    'RENDER',
+    ...render,
+    '',
+    'LIVE (per trade, median)',
+    ...live,
   ].join('\n');
-  (window as unknown as { __fumeBench: unknown }).__fumeBench = { environment, rows };
 }

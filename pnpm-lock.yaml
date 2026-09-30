@@ -29,6 +29,9 @@ importers:
       '@fume/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@fume/replay':
+        specifier: workspace:*
+        version: link:../../packages/replay
       react:
         specifier: ^19.3.0
         version: 19.3.0
@@ -56,6 +59,12 @@ importers:
         version: link:../core
 
   packages/core: {}
+
+  packages/replay:
+    dependencies:
+      '@fume/core':
+        specifier: workspace:*
+        version: link:../core
 
 packages:
 
