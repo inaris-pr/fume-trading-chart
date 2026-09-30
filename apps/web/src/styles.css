@@ -110,9 +110,32 @@ body,
 }
 
 .chart-area {
+  position: relative;
   flex: 1;
   min-height: 0;
   padding: 0;
+}
+
+/* History loading / empty / error notice (api source), centered over the chart. */
+.chart-status {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  z-index: 2;
+  max-width: calc(100% - 32px);
+  padding: 6px 12px;
+  transform: translateX(-50%);
+  border: 1px solid #343b48;
+  border-radius: 4px;
+  background: rgba(35, 40, 51, 0.92);
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.chart-status-error {
+  color: #f0a8a8;
+  border-color: #6b3434;
 }
 
 /* Positioned wrapper: the engine's container plus overlaid host controls. */

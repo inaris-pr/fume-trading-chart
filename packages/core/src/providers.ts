@@ -37,6 +37,11 @@ export interface BarPageRequest {
   intervalMinutes: number;
   /** Exclusive upper bound on bar start. */
   end: UnixMs;
+  /**
+   * Optional inclusive lower bound on bar start. When set, the provider returns bars in
+   * [start, end); if more than `limit` exist there, the newest `limit` are returned.
+   */
+  start?: UnixMs;
   limit: number;
   signal?: AbortSignalLike;
 }
@@ -67,7 +72,11 @@ export interface MarketStream {
   close(): void;
 }
 
-export interface MarketDataProvider {
+/**
+ * History-only part of the market-data port: instruments, calendar sessions and base bars. A
+ * backend history adapter (e.g. Stage 4, before any streaming) implements just this.
+ */
+export interface HistoricalMarketDataProvider {
   readonly id: ProviderId;
   readonly feed: DataFeedInfo;
   /**
@@ -79,6 +88,10 @@ export interface MarketDataProvider {
   resolveInstrument(symbol: string): Promise<Instrument | null>;
   getBars(request: BarPageRequest): Promise<BarPage>;
   getSessions(instrument: Instrument, from: UnixMs, to: UnixMs): Promise<readonly MarketSession[]>;
+}
+
+/** Full market-data port: history plus the live stream. */
+export interface MarketDataProvider extends HistoricalMarketDataProvider {
   openStream(handlers: MarketStreamHandlers): MarketStream;
 }
 

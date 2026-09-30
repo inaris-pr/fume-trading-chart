@@ -83,3 +83,23 @@ Measured 2026-09-29 with `/?bench` against the production build (Chromium 152, h
   still well under a millisecond. No incremental fold was needed.
 - Crosshair (overlay-only) repaint stays at 0.1–0.4 ms while live updates run.
 - `setData` for all 66k 1m bars: 36–90 ms once per symbol/timeframe switch (unchanged from Stage 2).
+
+## Stage 4 historical-data baseline (Alpaca IEX, local Worker)
+
+Measured 2026-09-29 (after the close) with `wrangler dev` on this machine, real Alpaca Basic/IEX data, the Worker's per-request log (`ms` = Worker time including upstream calls) and the browser's resource timings. Latency is dominated by Alpaca's responses and varies run to run; ranges are the observed spread.
+
+| Request (browser page size)   | Base interval | Upstream calls | Base bars fetched | Canonical bars | Worker time           |
+| ----------------------------- | ------------- | -------------- | ----------------- | -------------- | --------------------- |
+| SPY 1m (1000)                 | 1Min          | 1–3            | 1,177–1,178       | 1000           | 0.27–1.6 s            |
+| SPY 5m (800)                  | 5Min          | 1              | 905               | 800            | 0.23–0.44 s           |
+| SPY 15m (600)                 | 15Min         | 1              | 677–702           | 600            | 0.28–0.72 s           |
+| SPY 1h (500)                  | 15Min         | 3              | 2,078–2,380       | 500            | 0.47–3.4 s            |
+| SPY 4h (150)                  | 15Min         | 3–4            | 2,167–2,462       | 150            | 0.55–1.3 s            |
+| SPY 1d (150)                  | 15Min         | 6–7            | 4,054–4,986       | 149–150        | 1.2–2.3 s             |
+| Older page, 1d (150)          | 15Min         | 6              | 4,054–4,436       | 149–150        | 1.26–1.54 s (browser) |
+| `/sessions` (cached years)    | —             | 0              | —                 | —              | 11–20 ms (browser)    |
+| `/instruments/resolve` (cold) | —             | 1              | —                 | —              | ~0.56 s               |
+
+- **Canonical aggregation** (`buildCanonicalBars`, Node 24, same base-bar counts incl. dropped pre/post-market bars): 1m 0.43 ms, 5m 0.22 ms, 15m 0.19 ms, 1h 0.57 ms, 4h 0.46 ms, 1d (4,500 base bars, 150 sessions) 1.04 ms median. Aggregation is negligible next to upstream latency.
+- **Upstream paging observed:** IEX `15Min` pages of ~730–740 bars (about one month) regardless of `limit=10000`, so upstream calls scale with the time span. Requesting 300 daily candles hit the 10-page cap and returned 248 complete candles (`hasMore: true`); the browser therefore requests 150 per page for 4H/1D.
+- **Rate budget:** the largest request (1D) costs ≤ 7–9 upstream calls (bars + calendar/asset when not cached), well under the Basic 200 requests/min for one user; the chart keeps one older-page request in flight.

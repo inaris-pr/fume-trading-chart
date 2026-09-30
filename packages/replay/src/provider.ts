@@ -103,7 +103,8 @@ export class ReplayMarketDataProvider implements MarketDataProvider {
     const publishedBefore = Math.min(request.end, now - FINAL_BAR_DELAY_MS - MINUTE + 1);
     const endIndex = upperBoundByStart(all, publishedBefore); // bars[0..endIndex) start < limit
     const limit = Math.max(1, Math.min(MAX_PAGE, Math.floor(request.limit)));
-    const startIndex = Math.max(0, endIndex - limit);
+    const floorIndex = request.start === undefined ? 0 : upperBoundByStart(all, request.start);
+    const startIndex = Math.max(floorIndex, endIndex - limit);
     const bars = all
       .slice(startIndex, endIndex)
       .map((b) => this.dataset.officialMinute(symbol, b, now));

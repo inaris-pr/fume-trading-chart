@@ -1,0 +1,4 @@
+# Copy to apps/worker/.dev.vars (gitignored) and fill in your Alpaca PAPER keys locally.
+# Never commit .dev.vars, never paste the values into chat, logs or screenshots.
+ALPACA_API_KEY_ID=
+ALPACA_API_SECRET_KEY=

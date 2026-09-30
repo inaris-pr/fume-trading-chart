@@ -1,0 +1,219 @@
+{
+  "capturedAt": "2026-09-30T02:44:06.819Z",
+  "symbol": "SPY",
+  "feed": "iex",
+  "adjustment": "raw",
+  "session": {
+    "date": "2026-09-29",
+    "open": "2026-09-29T13:30:00.000Z",
+    "close": "2026-09-29T20:00:00.000Z"
+  },
+  "counts": {
+    "1Min": 390,
+    "5Min": 78,
+    "15Min": 26
+  },
+  "missing1MinCount": 0,
+  "missing1Min": [],
+  "empty5MinBuckets": 0,
+  "empty15MinBuckets": 0,
+  "canonicalEquality": {
+    "5m: 1Min vs 5Min": {
+      "equal": true,
+      "detail": "78 candles identical (OHLC, volume, trade count)"
+    },
+    "15m: 1Min vs 15Min": {
+      "equal": true,
+      "detail": "26 candles identical (OHLC, volume, trade count)"
+    },
+    "1h: 1Min vs 15Min": {
+      "equal": true,
+      "detail": "7 candles identical (OHLC, volume, trade count)"
+    },
+    "4h: 1Min vs 15Min": {
+      "equal": true,
+      "detail": "2 candles identical (OHLC, volume, trade count)"
+    },
+    "1d: 1Min vs 15Min": {
+      "equal": true,
+      "detail": "1 candles identical (OHLC, volume, trade count)"
+    }
+  },
+  "hourStarts": ["09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30"],
+  "fourHourStarts": ["09:30", "13:30"],
+  "earlyCloseSession": "2025-11-28",
+  "checks": [
+    {
+      "name": "calendar: session opens 09:30 and closes 16:00 New York time",
+      "pass": true,
+      "detail": "2026-09-29"
+    },
+    {
+      "name": "calendar: early closes present in Nov/Dec 2025",
+      "pass": true,
+      "detail": "2025-11-28 18:00Z, 2025-12-24 18:00Z"
+    },
+    {
+      "name": "calendar: holiday 2025-11-27 (Thanksgiving) absent",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "1Min: single page (no next_page_token)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "5Min: single page (no next_page_token)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "15Min: single page (no next_page_token)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "1Min bars epoch-aligned",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "5Min bars epoch-aligned",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "15Min bars epoch-aligned",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "all bars inside the regular session [open, close)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "t labels the bar START (5Min = fold of 1Min [t, t+5m))",
+      "pass": true,
+      "detail": "end-labeled hypothesis: false"
+    },
+    {
+      "name": "t labels the bar START (15Min = fold of 1Min [t, t+15m))",
+      "pass": true,
+      "detail": "end-labeled hypothesis: false"
+    },
+    {
+      "name": "first 1Min bar is at the 09:30 open",
+      "pass": true,
+      "detail": "2026-09-29T13:30:00.000Z"
+    },
+    {
+      "name": "no bar starts at the 16:00 close",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "15Min nests into 5m buckets for this session",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "15Min nests into 15m buckets for this session",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "15Min nests into 1h buckets for this session",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "15Min nests into 4h buckets for this session",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "15Min nests into 1d buckets for this session",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "canonical 5m from 1Min == from 5Min",
+      "pass": true,
+      "detail": "78 candles identical (OHLC, volume, trade count)"
+    },
+    {
+      "name": "canonical 15m from 1Min == from 15Min",
+      "pass": true,
+      "detail": "26 candles identical (OHLC, volume, trade count)"
+    },
+    {
+      "name": "canonical 1h from 1Min == from 15Min",
+      "pass": true,
+      "detail": "7 candles identical (OHLC, volume, trade count)"
+    },
+    {
+      "name": "canonical 4h from 1Min == from 15Min",
+      "pass": true,
+      "detail": "2 candles identical (OHLC, volume, trade count)"
+    },
+    {
+      "name": "canonical 1d from 1Min == from 15Min",
+      "pass": true,
+      "detail": "1 candles identical (OHLC, volume, trade count)"
+    },
+    {
+      "name": "pagination: next_page_token returned when more bars exist",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "pagination: page 2 continues after page 1 with no overlap",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "sort=desc returns newest first, ending at the last minute",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "exclusive end via inclusive end-1ms: no bar at end",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "early close 2025-11-28: canonical 1h from 1Min == from 15Min",
+      "pass": true,
+      "detail": "4 candles identical (OHLC, volume, trade count)"
+    },
+    {
+      "name": "early close 2025-11-28: canonical 4h from 1Min == from 15Min",
+      "pass": true,
+      "detail": "1 candles identical (OHLC, volume, trade count)"
+    },
+    {
+      "name": "early close 2025-11-28: canonical 1d from 1Min == from 15Min",
+      "pass": true,
+      "detail": "1 candles identical (OHLC, volume, trade count)"
+    }
+  ],
+  "verdict": "PASS: declare native intervals [1, 5, 15]",
+  "fixtures": [
+    "calendar-recent.json",
+    "calendar-early-close-2025-11.json",
+    "asset-spy.json",
+    "error-404-asset.json",
+    "bars-spy-1min-2026-09-29.json",
+    "bars-spy-5min-2026-09-29.json",
+    "bars-spy-15min-2026-09-29.json",
+    "bars-spy-1min-page1-limit200-2026-09-29.json",
+    "bars-spy-1min-page2-limit200-2026-09-29.json",
+    "bars-spy-1min-desc-limit5-2026-09-29.json",
+    "bars-spy-1min-2025-11-28.json",
+    "bars-spy-15min-2025-11-28.json",
+    "error-400-bars.json",
+    "error-403-recent-sip.json"
+  ]
+}

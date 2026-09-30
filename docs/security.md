@@ -3,11 +3,13 @@
 ## Credentials
 
 - The Alpaca **paper** key ID and secret exist in only two places:
-  1. **Local:** `apps/worker/.dev.vars`, created by you by copying the variables from `.env.example`. The file is gitignored and read by `wrangler dev`.
+  1. **Local:** `apps/worker/.dev.vars`, created by you from `apps/worker/.dev.vars.example` (empty values only). The file is gitignored and read by `wrangler dev` and by the S1 script (`pnpm s1`), which never prints, logs or saves the values.
   2. **Cloudflare:** Worker secrets, set with `pnpm exec wrangler secret put ALPACA_API_KEY_ID` and `… ALPACA_API_SECRET_KEY` from `apps/worker/`. You type the values into the Wrangler prompt yourself. They never go into chat, files or shell history.
 - The browser never receives them. They must not appear in frontend code, `import.meta.env`/`VITE_*` variables, API responses, query strings, local/session storage, logs or source maps. The frontend bundle is built without access to the Worker's env.
 - `.gitignore` excludes `.env*` and `.dev.vars*` (except the examples). Before the first commit of each stage: `git grep -nE "APCA|SECRET|PK[A-Z0-9]{16}"` must show only placeholder or variable names. We could add a pre-commit secret scan later if wanted.
 - Logs never include auth frames, request headers, or the full config object.
+- **Stage 4 enforcement:** credentials are sent only in the `APCA-API-KEY-ID` / `APCA-API-SECRET-KEY` request headers from `apps/worker/src/providers/alpaca/client.ts`; never in URLs, errors or logs (tested). Worker logs are one structured line per request (route, status, ms, upstream call count, bar counts). Recorded fixtures contain response bodies only (a boundary test rejects auth headers, key-shaped strings and account identifiers in fixtures). `pnpm scan:secrets` scans every tracked and untracked file; `pnpm scan:bundle` scans `apps/web/dist` for Alpaca hosts, credential header names, `__fume` handles and the actual local credential values (compared, never printed).
+- **Host guard (Stage 4):** the Worker treats market data as "not configured" (`503`) unless `ALPACA_DATA_BASE_URL` is exactly `https://data.alpaca.markets`, `ALPACA_TRADING_BASE_URL` exactly `https://paper-api.alpaca.markets` and `ALPACA_DATA_FEED` exactly `iex`.
 
 ## Paper-only guard
 
@@ -34,7 +36,7 @@ Pluggable authenticators, tried in configured order, failing closed:
 - **External platform (designed in Stage 10, not built earlier):** one of the following, decided then with the platform's architecture in view. The origin allowlist doesn't change this choice.
   - An Access **service token** for server-to-server calls;
   - a **short-lived signed token** (JWT with audience `fume`, a lifetime of a few minutes) minted by that platform's backend with a shared signing secret stored as a Worker secret.
-- **Local:** `wrangler dev` bound to localhost, with a dev-only authenticator enabled only when `FUME_ENV=local`.
+- **Local (implemented in Stage 4):** `wrangler dev` bound to 127.0.0.1, with a dev-only authenticator that accepts a request only when `FUME_ENV=local` **and** the request host is loopback (`localhost`, `127.0.0.1`, `[::1]`). Any other environment or host gets `401 unauthorized` (fail closed); there is no production authenticator yet.
 
 ### 3. Authorization (on the `Principal`)
 

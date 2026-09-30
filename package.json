@@ -9,11 +9,16 @@
   },
   "scripts": {
     "dev": "pnpm --filter @fume/web dev",
+    "dev:worker": "pnpm --filter @fume/worker dev",
+    "dev:api": "pnpm --parallel --filter @fume/web --filter @fume/worker dev",
     "build": "pnpm --filter @fume/web build",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json && pnpm -r --if-present typecheck",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "s1": "pnpm --filter @fume/worker s1",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "scan:bundle": "node scripts/scan-web-bundle.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",

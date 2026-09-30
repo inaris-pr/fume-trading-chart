@@ -8,5 +8,6 @@ export * from './sessions.ts';
 export * from './time-scale.ts';
 export * from './format.ts';
 export * from './aggregate.ts';
+export * from './history.ts';
 export * from './event-time.ts';
 export * from './live/index.ts';

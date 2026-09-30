@@ -25,6 +25,17 @@ Base path: `/api/v1`. JSON bodies use `@fume/core` shapes.
 
 `code` values: `unauthorized`, `forbidden_origin`, `invalid_request`, `not_found`, `rejected` (by broker), `insufficient_entitlement`, `rate_limited` (with a `Retry-After` header), `unavailable`, `internal`.
 
+## Stage 4 implementation (local only)
+
+Implemented in `apps/worker` and served by `wrangler dev` on 127.0.0.1:8787 (the Vite dev server proxies `/api`): `GET /api/v1/health`, `/instruments/resolve`, `/sessions`, `/bars`. Everything else returns `404 not_found`; non-GET methods `405 invalid_request` (`Allow: GET, OPTIONS`). Every response is JSON with `Cache-Control: no-store` and `Vary: Origin`.
+
+- **Order of checks:** origin policy (`403 forbidden_origin`, no CORS headers) → authentication (`401 unauthorized` unless `FUME_ENV=local` and a loopback host) → method/route → validation (`400 invalid_request` with `details.field`) → handler.
+- **Error mapping** (upstream text, payloads and headers are never forwarded): provider `invalid_request` → 400; `not_found` → 404; `insufficient_entitlement` → 403; `rate_limited` → 429 with `Retry-After` (the provider's value, else 60 s); provider authentication failure → `503 unavailable` (the backend's own credentials were refused); malformed provider payload → `502 unavailable`; provider down/timeout → `503 unavailable` (retryable); unconfigured provider → `503 unavailable`; unexpected bug → `500 internal`.
+- **Validation:** `symbol` 1–10 of `[A-Z0-9.]` starting with a letter (upper-cased); `instrumentId` `eq:<SYMBOL>`; `timeframe` one of `1m 5m 15m 1h 4h 1d`; `session` `regular` (default), while `extended` → 400; `end`/`from`/`to` non-negative integer UnixMs; `limit` 1–2000 (default 500); `/sessions` requires `from < to` and at most 1100 days.
+- **`/bars` paging:** bars ascending, unique starts, `end` exclusive. `hasMore` is true while older history may exist (the page did not reach the 2016 IEX floor, or the base fetch was truncated). A page never contains a partial candle: when the upstream fetch is truncated, candles older than the oldest fetched base bar are omitted and the client continues from the oldest returned candle.
+- **Candle status:** `final` only if the bucket has ended at `serverTime` and all base bars in it are final; otherwise `provisional`. Nothing is fabricated for missing or future minutes.
+- **`/health`:** `{ ok, version, tradingEnvironment: "paper", marketDataFeed, marketDataConfigured }`. No upstream call, no key material.
+
 ## Market data
 
 ### `GET /api/v1/instruments/resolve?symbol=SPY`

@@ -4,8 +4,10 @@
  */
 export class BoundedKeySet {
   private readonly keys = new Set<string>();
+  readonly capacity: number;
 
-  constructor(readonly capacity: number) {
+  constructor(capacity: number) {
+    this.capacity = capacity;
     if (!(capacity >= 1) || !Number.isInteger(capacity)) {
       throw new Error(`BoundedKeySet capacity must be a positive integer, got ${capacity}`);
     }
