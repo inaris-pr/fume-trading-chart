@@ -148,23 +148,48 @@ pnpm scan:bundle    # after pnpm build
 
 ## Exact next action
 
-**Futures-provider + multi-provider architecture checkpoint** (roadmap Stage 5 steps D–E). Begin
-only after explicit owner approval. No futures implementation and no permanent Stage 5 streaming
-during this checkpoint.
+**NEXT ACTION (owner): obtain written Databento confirmation for this exact use case before any
+implementation or purchase.** Claude does not contact Databento, create an account, buy Standard or
+request API keys.
 
-1. Research data providers capable of real-time + historical futures data for **GC, SI, CL, NQ,
-   YM**.
-2. Compare: exchange coverage; CME / CBOT / COMEX / NYMEX entitlements; real-time data;
-   trade-level streaming; historical depth; official bars; contract metadata;
-   expiration/rollover data; continuous contracts; API/WebSocket design; connection/rate limits;
-   pricing; professional vs non-professional exchange fees; redistribution/display restrictions;
-   Cloudflare compatibility; server-side credential support; paper/broker integration
-   possibilities.
-3. Design the provider-neutral permanent hub topology on the approved Durable Object primitive,
-   honoring the ARCHITECTURE.md §6 constraints.
-4. **STOP for owner approval** before any permanent Stage 5 streaming implementation.
+Use case to confirm:
 
-Do not begin Stage 6 trading work.
+- one natural person; non-professional / personal use
+- one private Fume application
+- Databento Standard, CME data (GLBX.MDP3)
+- the backend connection originates from a Cloudflare Durable Object, which processes/normalizes
+  the data
+- the data is displayed only to that same subscriber
+- no customers, no third parties, no redistribution, no commercial service, no resale, no external
+  API exposing the data
+
+Question: "Does this private single-user Cloudflare Durable Object backend remain covered by
+Databento Standard personal CME licensing, or would it be classified as non-display/commercial use
+requiring a different license?" Also ask:
+
+- whether this counts as one of the two permitted personal devices
+- whether server-side processing changes the device count
+- whether Cloudflare-hosted processing is allowed
+- whether using the Raw API from Cloudflare is permitted
+- whether any separate CME non-display agreement or fee would apply
+
+**If Databento confirms (in writing):**
+
+1. Run a tiny Databento technical spike (isolated, non-production, like S3).
+2. Use free/trial/historical capability first, if available.
+3. Test Cloudflare Durable Object outbound TCP (`cloudflare:sockets`) to the Databento Raw API.
+4. Verify: TCP connect; CRAM auth; JSON encoding (price and timestamp representation); GC/SI/CL/NQ/YM
+   parent-symbol subscriptions; contract definitions; 24-hour intraday replay; the
+   replay-complete signal; the reconnect/dedup boundary; Cloudflare lifecycle behavior
+   (15-minute rule, eviction, deploy).
+5. **STOP for owner approval.**
+6. Only after that: implement the permanent futures adapter and the provider-scoped hub.
+
+**If Databento does not confirm:** evaluate Massive as the fallback and obtain equivalent written
+server-side-use approval from Massive before any implementation.
+
+Until then, do NOT: create Databento code, modify Worker or chart code, add futures symbols, push
+the branch, implement permanent Stage 5 streaming, or begin Stage 6.
 
 ## Recovery instructions
 
