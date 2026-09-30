@@ -291,6 +291,21 @@ Consequences:
 
 Stages 1–4 need no DO in either case.
 
+### 6.1 Multi-provider streaming (planning note, 2026-09-30; not implemented)
+
+Fume will stream from **more than one provider**: Alpaca IEX for US equities/ETFs, and later a futures-capable provider for GC, SI, CL, NQ and YM. The design above describes the Alpaca case only; the permanent Stage 5 design must not hard-code "one hub = one Alpaca socket". It must allow **provider-scoped upstream connections**, potentially simultaneous, for example:
+
+```
+StreamHub (or one hub per provider, if that proves cleaner)
+  ├─ upstream: alpaca/iex             (1 socket; S2: a 2nd is refused with 406)
+  └─ upstream: <futures-provider>/<feed>
+```
+
+- Subscriptions route to the upstream that owns the instrument (`Instrument.marketDataRef.providerId`); each upstream keeps its own reference-counted subscription set, reconnect/backoff, stale detection and `resync`.
+- Browser frames stay provider-neutral (`MarketEvent`); a client may hold instruments from different providers at once.
+- Stage 4 pieces that are single-provider today and will need design at the checkpoint (not changed now): the Worker router takes one `HistoricalMarketDataProvider`; `/api/v1` accepts only `eq:` instrument ids; `/instruments/resolve` treats a symbol as an equity ticker (a futures root such as `NQ` resolves to a contract, not a ticker).
+- Whether hubs are Durable Objects at all is decided by S3; the multi-provider shape is decided at the futures-provider checkpoint (roadmap, Stage 5 steps C–E).
+
 ## 7. Decision: database (**NO**)
 
 The MVP has no application-owned data that must persist:

@@ -38,10 +38,10 @@ Fetches that failed: `/reference/deleteopenposition` returned 404. A second read
 | Messages arrive as JSON arrays (possibly several items per frame); msgpack is optional                                                                                                              | VERIFIED                                                                                                                       |
 | Subscribe/unsubscribe `{"action":"subscribe","trades":["SPY"]}`; the ack is the full current subscription set                                                                                       | VERIFIED                                                                                                                       |
 | Connections per endpoint are "limited based on the user's subscription … in many subscriptions … this limit is **1**"                                                                               | VERIFIED                                                                                                                       |
-| Error codes: 401 not authenticated, 402 auth failed, 404 auth timeout, 405 symbol limit, **406 connection limit exceeded**, **407 slow client**, 409 insufficient subscription                      | VERIFIED                                                                                                                       |
+| Error codes: 401 not authenticated, 402 auth failed, 404 auth timeout, 405 symbol limit, **406 connection limit exceeded**, **407 slow client**, 409 insufficient subscription                      | VERIFIED (docs); 406 and 401 also **observed** in S2 on `v2/iex`                                                               |
 | Slow clients may be disconnected without an error message                                                                                                                                           | VERIFIED                                                                                                                       |
 | No sequence numbers, no replay, no documented heartbeat or ordering guarantee                                                                                                                       | VERIFIED (by absence in the fetched pages)                                                                                     |
-| Whether the connection limit applies per API key or per account                                                                                                                                     | UNVERIFIED (spike S2)                                                                                                          |
+| Whether the connection limit applies per API key or per account                                                                                                                                     | Still UNVERIFIED: S2 (2026-09-30) used one key pair only; see S2 results                                                       |
 
 ## Spike S1 results (2026-09-29)
 
@@ -68,6 +68,42 @@ Run with `pnpm s1` against real Alpaca data (`feed=iex`, `adjustment=raw`, symbo
 **Verdict:** native `5Min` and `15Min` pass alignment, start-labeling, nesting and canonical equality; Fume declares `[1, 5, 15]`. This is one symbol on two sessions, not a universal guarantee; the adapter still rejects any bar that is not interval-aligned, and `aggregateBars` rejects any base bar that straddles a canonical boundary.
 
 **Follow-up observations (same day, not part of S1's pass/fail):** IEX `15Min` history includes pre/post-market bars (08:00–16:15 ET on 2026-09-28; 30 bars that day); upstream pages held ~730–740 `15Min` bars (about one month) even with `limit=10000`; Alpaca IEX history has no bars for 2025-03-10 (SIP does).
+
+## Spike S2 results (2026-09-30)
+
+Run with `node scripts/s2-connection-limit.ts` from `apps/worker` (diagnostic only; not a stream
+adapter). Endpoint `wss://stream.data.alpaca.markets/v2/iex`, **one** credential pair (the local
+paper keys), subscription `trades: ["SPY"]`. Run 06:45–06:55 ET (pre-market): **no SPY trades
+arrived**, so socket health was proven by control round-trips (re-sending the subscription and
+receiving the `subscription` ack), not by market traffic. Two identical rounds plus two
+single-purpose runs; results were identical where repeated.
+
+| Observation (same key, same endpoint)                                       | Result                                                                                                                                             |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connection #1                                                               | opened; `connected`; auth `authenticated` in 71–84 ms; subscription acked                                                                          |
+| Connection #2 while #1 is authenticated                                     | the WebSocket **opens** and receives `connected`; the **auth** reply is `[{"T":"error","code":406,"msg":"connection limit exceeded"}]` in 67–79 ms |
+| Connection #2 after the 406                                                 | stays open but unusable: `subscribe` → `401 not authenticated`                                                                                     |
+| Connection #1 during/after #2's attempt                                     | **not affected**: stayed open; liveness re-subscribe acked in 73–229 ms                                                                            |
+| Refused #2 left idle                                                        | closed by Alpaca ~9.2 s after the 406 (~10 s after connect), with **no** error frame first (client sees 1006)                                      |
+| After #1 closes: new connection                                             | first attempt succeeded, 359–411 ms after #1 closed (auth 71–72 ms); no transient 406                                                              |
+| After #1 closes: re-auth on the refused #2 socket (within its ~10 s window) | `authenticated` 624 ms after #1 closed (120 ms round trip); subscription acked                                                                     |
+| Client-initiated `close(1000)`                                              | every such close ended as code **1006** on the Node client (no close frame observed from the server)                                               |
+
+**What S2 proves (for this key on `v2/iex`):** the limit is enforced at **authentication** with
+`406`; the **existing** connection keeps working and is **not** displaced by the newcomer ("first
+connection wins"); the slot is released as soon as the holder disconnects (a replacement
+succeeded within ~0.4 s, and a refused socket could re-authenticate within its auth window).
+
+**What S2 does NOT prove:** whether the limit is per API key or per account (only one key pair
+was available; distinguishing them needs a second, independently valid key pair for the same
+account); whether other endpoints (`v2/sip`, `v2/delayed_sip`, `v1beta1/*`) count against the
+same limit (not tested: not needed for Fume's IEX-only design and SIP is not entitled); behavior
+under live market traffic; limits of the trading (`trade_updates`) stream (out of S2 scope).
+
+**Design consequence:** a second backend process holding the IEX socket (a second tab's relay,
+`wrangler dev` next to a deployment, an overlapping refresh) is refused with 406 while the first
+connection keeps the slot. Stage 5 needs exactly one upstream holder, or a reconnect loop that
+treats 406 as "slot busy" and retries with backoff until the holder disconnects.
 
 ## Alpaca: trading
 

@@ -4,7 +4,7 @@
 
 **Current stage: Stage 5 — Real-time + preview deploy**
 
-Status: **PREPARED · NOT IMPLEMENTED**
+Status: **S2 DONE (uncommitted, awaiting review) · S3 NOT STARTED · NOT IMPLEMENTED**
 
 - Current branch: `stage-5/realtime-preview` (local only until the owner approves a push)
 - Base / `main`: `59899dacfb2b52b39db8da397fe391dd2f170909`
@@ -28,7 +28,15 @@ Stage 5 must **not** jump straight into the full implementation. Required gates 
   before committing to the StreamHub architecture (ARCHITECTURE.md §6).
 
 The eventual implementation follows **one** of: **A.** Durable Object StreamHub, or **B.** the
-approved single-tab fallback, decided by the S3 result. Later in Stage 5: **S4** (provisional
+approved single-tab fallback, decided by the S3 result.
+
+**Stage 5 sequence (owner decision 2026-09-30, roadmap is authoritative):** A. S2 ✅ → B. S3 →
+C. owner DO vs single-tab decision → D. **futures-provider + multi-provider architecture
+checkpoint** → E. owner approval → F. permanent streaming implementation → G. S4 → H. S7.
+Reason: Fume will support multiple market-data providers: Alpaca for equities/ETFs and, later, a
+futures provider for **GC, SI, CL, NQ, YM** (actual futures, not ETF proxies such as
+GLD/SLV/USO/QQQ/DIA). No futures provider has been chosen and nothing futures-related is
+implemented. See roadmap "Multi-provider / futures direction" and ARCHITECTURE §6.1. Later in Stage 5: **S4** (provisional
 IEX trade-built minute vs the official minute bar) and **S7** (Cloudflare Access including
 WebSocket upgrades, JWT verification in the Worker).
 
@@ -39,6 +47,10 @@ WebSocket upgrades, JWT verification in the Worker).
 - No trading, orders, positions or P&L in Stage 5; no Stage 6 work.
 - No permanent Durable Object architecture until the S3 go/no-go. Do not assume the DO path is
   approved merely because it appears in the roadmap.
+- The streaming layer must stay provider-neutral: no "one StreamHub = one Alpaca socket" design;
+  provider specifics stay inside provider adapters.
+- No futures-provider code, no GC/SI/CL/NQ/YM in the UI, no fake futures data until the checkpoint
+  is approved.
 
 ## Completed stages
 
@@ -125,7 +137,10 @@ validation, not production implementation. Order:
 
 1. Re-read: `CLAUDE.md`, `docs/HANDOFF.md`, `docs/roadmap.md`, `ARCHITECTURE.md` §6,
    `docs/market-data.md`, `docs/websocket-api.md`, `docs/security.md`.
-2. **Run S2:** using the existing local Alpaca credentials (never exposed), open two controlled IEX
+2. **S2 — done 2026-09-30** (results in [research.md](research.md#spike-s2-results-2026-09-30);
+   script `apps/worker/scripts/s2-connection-limit.ts`). Same key: 2nd IEX connection is refused
+   at auth with `406`, the 1st keeps working, the slot frees immediately on disconnect. Per-key vs
+   per-account is **still unresolved** (one key pair only). Original instruction: open two controlled IEX
    streaming connections and record the exact observed connection-limit behavior. Do not build the
    production stream adapter yet.
 3. **Design and perform the S3 gate:** a minimal Durable Object experiment with an outbound Alpaca
@@ -133,8 +148,12 @@ validation, not production implementation. Order:
    lifecycle/eviction observations, duration/cost measurement and extrapolation. Use a Cloudflare
    preview only as far as this spike requires. Present the results before choosing StreamHub vs the
    single-tab fallback.
-4. **STOP for the owner's go/no-go** before implementing the permanent Stage 5 streaming
-   architecture.
+4. **STOP for the owner's go/no-go** on the Durable Object architecture.
+
+> **AFTER S3: do not immediately implement the permanent StreamHub.** First perform the approved
+> futures-provider / multi-provider architecture checkpoint (roadmap Stage 5 steps D–E), because
+> Fume is expected to support GC, SI, CL, NQ and YM in addition to Alpaca equities. Implement the
+> permanent streaming architecture only after the owner approves that checkpoint.
 
 Do not begin Stage 6 trading work.
 
