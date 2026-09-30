@@ -2,15 +2,43 @@
 
 ## Current status
 
-**Stage 4 — Alpaca historical market data**
+**Current stage: Stage 5 — Real-time + preview deploy**
 
-Status: IMPLEMENTED · VALIDATED · VISUALLY APPROVED · COMMITTED · PUSHED · **PR NOT YET CREATED**
+Status: **PREPARED · NOT IMPLEMENTED**
 
-- Current branch: `stage-4/alpaca-historical-data` (pushed, tracks `origin`)
-- Stage 4 commit: `6dc388a988cffc13c37eb2a47e4051c5ba2ad2ee`
-- Current `main` / base: `61b27b1267b5dd3d7d4eca39c8b7b7cbca1ef988`
-- The working tree was clean before this handoff documentation was added (it is committed on the
-  same branch as a separate documentation-only commit).
+- Current branch: `stage-5/realtime-preview` (local only until the owner approves a push)
+- Base / `main`: `59899dacfb2b52b39db8da397fe391dd2f170909`
+- Stage 4: **MERGED via PR #4**; main squash commit `59899dacfb2b52b39db8da397fe391dd2f170909`.
+- Stage 4 historical Alpaca functionality is now the **frozen baseline**.
+
+## Stage 5 scope (from [roadmap.md](roadmap.md); roadmap is authoritative)
+
+- Alpaca real-time market-data stream adapter
+- backend stream hub
+- `/api/v1/stream`
+- real live candles
+- preview deployment behind Cloudflare Access
+
+Stage 5 must **not** jump straight into the full implementation. Required gates first:
+
+- **S2 — connection limit:** does Alpaca's one-connection limit apply per API key or per account,
+  and what exactly happens when a second IEX stream is opened (error 406? old socket dropped?).
+- **S3 — Durable Object gate:** outbound WebSocket from a DO, text/binary frames, auth timing,
+  disconnect/reconnect, lifecycle/eviction and duration cost. The roadmap requires a **go/no-go**
+  before committing to the StreamHub architecture (ARCHITECTURE.md §6).
+
+The eventual implementation follows **one** of: **A.** Durable Object StreamHub, or **B.** the
+approved single-tab fallback, decided by the S3 result. Later in Stage 5: **S4** (provisional
+IEX trade-built minute vs the official minute bar) and **S7** (Cloudflare Access including
+WebSocket upgrades, JWT verification in the Worker).
+
+## Stage 5 boundaries
+
+- Stage 4 history must keep working (no regression); Replay remains available.
+- The browser still never connects directly to Alpaca; credentials stay Worker/backend-only.
+- No trading, orders, positions or P&L in Stage 5; no Stage 6 work.
+- No permanent Durable Object architecture until the S3 go/no-go. Do not assume the DO path is
+  approved merely because it appears in the roadmap.
 
 ## Completed stages
 
@@ -92,25 +120,23 @@ pnpm scan:bundle    # after pnpm build
 
 ## Exact next action
 
-Create **PR #4**: `stage-4/alpaca-historical-data` → `main`, title
-**`Stage 4: Alpaca historical market data`**. The PR includes the Stage 4 implementation plus this
-handoff documentation.
+**Begin Stage 5 only after explicit instruction.** The first Stage 5 work is architecture/risk
+validation, not production implementation. Order:
 
-After the owner squash-merges PR #4:
+1. Re-read: `CLAUDE.md`, `docs/HANDOFF.md`, `docs/roadmap.md`, `ARCHITECTURE.md` §6,
+   `docs/market-data.md`, `docs/websocket-api.md`, `docs/security.md`.
+2. **Run S2:** using the existing local Alpaca credentials (never exposed), open two controlled IEX
+   streaming connections and record the exact observed connection-limit behavior. Do not build the
+   production stream adapter yet.
+3. **Design and perform the S3 gate:** a minimal Durable Object experiment with an outbound Alpaca
+   WebSocket: text/binary frame handling, auth timing, disconnect/reconnect behavior,
+   lifecycle/eviction observations, duration/cost measurement and extrapolation. Use a Cloudflare
+   preview only as far as this spike requires. Present the results before choosing StreamHub vs the
+   single-tab fallback.
+4. **STOP for the owner's go/no-go** before implementing the permanent Stage 5 streaming
+   architecture.
 
-1. `git fetch origin`
-2. switch to `main`
-3. pull `origin/main` (fast-forward only)
-4. verify the Stage 4 content is present on `main` (tree/content comparison, not only ancestry)
-5. delete the local Stage 4 branch
-6. delete the remote Stage 4 branch and prune
-7. create the Stage 5 branch. `docs/roadmap.md` defines Stage 5's scope but does **not** name the
-   branch: follow the `stage-N/<scope>` convention and confirm the exact name with the owner.
-8. **Do not implement Stage 5 until explicitly instructed.**
-
-Stage 5 is expected to introduce real-time Alpaca market data / WebSockets and the related backend
-streaming architecture (with spikes S2–S4 and the S3 Durable Object cost gate), but
-[roadmap.md](roadmap.md) is authoritative for the exact scope.
+Do not begin Stage 6 trading work.
 
 ## Recovery instructions
 
