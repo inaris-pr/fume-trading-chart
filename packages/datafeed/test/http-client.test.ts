@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { InstrumentId } from '@fume/core';
-import { FumeApiError, FumeHttpClient, type FetchLike } from '../src/api/fume-client.ts';
+import { FumeApiError, FumeHttpClient, type FetchLike } from '../src/api/http-client.ts';
 
 const SPY = 'eq:SPY' as InstrumentId;
 const bar = (start: number, extra: Record<string, unknown> = {}) => ({
@@ -142,5 +142,60 @@ describe('FumeHttpClient', () => {
     expect(
       (await apiError(client({ instrument: { id: 'eq:SPY' } }).c.resolveInstrument('SPY'))).code,
     ).toBe('internal');
+  });
+});
+
+describe('embedding configuration', () => {
+  const okBody = {
+    instrument: {
+      id: 'fut:NQ:2026-12',
+      displaySymbol: 'NQZ6',
+      currency: 'USD',
+      tickRules: [],
+      session: { timezone: 'America/Chicago' },
+      priceFormat: { kind: 'decimal', decimals: 2 },
+      tradable: false,
+    },
+    stream: { key: 'futures-delayed' },
+  };
+
+  test('configurable base URL and auth headers on every request (never in the URL)', async () => {
+    const calls: { url: string; headers: Record<string, string> }[] = [];
+    const c = new FumeHttpClient({
+      baseUrl: 'https://fume.example/api/v1/',
+      getAuthHeaders: async () => ({ Authorization: 'Bearer host-token' }),
+      fetch: async (url, init) => {
+        calls.push({ url, headers: init!.headers as Record<string, string> });
+        return new Response(JSON.stringify(okBody), { status: 200 });
+      },
+    });
+    const r = await c.resolveInstrument('NQ', undefined, 'future');
+    expect(r).toMatchObject({ instrument: { id: 'fut:NQ:2026-12' }, streamKey: 'futures-delayed' });
+    expect(calls[0]!.url).toBe(
+      'https://fume.example/api/v1/instruments/resolve?symbol=NQ&assetClass=future',
+    );
+    expect(calls[0]!.headers).toMatchObject({
+      Authorization: 'Bearer host-token',
+      Accept: 'application/json',
+    });
+  });
+
+  test('error details.reason is surfaced as a provider-neutral reason', async () => {
+    const c = new FumeHttpClient(async () =>
+      Response.json(
+        {
+          error: {
+            code: 'not_found',
+            message: 'That futures contract has expired',
+            retryable: false,
+            details: { reason: 'contract_expired' },
+          },
+        },
+        { status: 404 },
+      ),
+    );
+    const e = await c.resolveInstrument('NQU6', undefined, 'future').catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(FumeApiError);
+    expect(e).toMatchObject({ status: 404, code: 'not_found', reason: 'contract_expired' });
   });
 });

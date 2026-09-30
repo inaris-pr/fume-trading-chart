@@ -29,6 +29,9 @@ importers:
       '@fume/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@fume/datafeed':
+        specifier: workspace:*
+        version: link:../../packages/datafeed
       '@fume/replay':
         specifier: workspace:*
         version: link:../../packages/replay
@@ -69,6 +72,19 @@ importers:
         version: link:../core
 
   packages/core: {}
+
+  packages/datafeed:
+    dependencies:
+      '@fume/core':
+        specifier: workspace:*
+        version: link:../core
+      '@fume/replay':
+        specifier: workspace:*
+        version: link:../replay
+    devDependencies:
+      '@fume/chart':
+        specifier: workspace:*
+        version: link:../chart
 
   packages/replay:
     dependencies:

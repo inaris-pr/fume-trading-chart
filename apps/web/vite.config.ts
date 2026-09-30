@@ -13,7 +13,8 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     host: 'localhost',
-    proxy: { '/api': { target: WORKER_DEV_URL, changeOrigin: true } },
+    // `ws: true` also forwards the /api/v1/stream WebSocket upgrade to the local Worker.
+    proxy: { '/api': { target: WORKER_DEV_URL, changeOrigin: true, ws: true } },
   },
   preview: { port: 4173, strictPort: true, host: 'localhost' },
   build: { sourcemap: true },

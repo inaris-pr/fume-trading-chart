@@ -55,13 +55,15 @@ describe('dataset', () => {
     expect(dataset.calendar.length).toBeGreaterThan(171);
   });
 
+  // Builds and deep-compares a second full dataset (5 symbols x ~66k minutes): CPU-bound, measured
+  // at ~5-6 s on the dev machine, so it gets an explicit timeout instead of the 5 s default.
   test('deterministic: a second dataset produces identical history and tape', () => {
     const other = new ReplayDataset();
     for (const s of REPLAY_SYMBOLS) {
       expect(other.minuteBars(s)).toEqual(dataset.minuteBars(s));
       expect(JSON.stringify(other.tape(s))).toBe(JSON.stringify(dataset.tape(s)));
     }
-  });
+  }, 20_000);
 
   test('symbols are distinct and use provider-neutral metadata', () => {
     const closes = REPLAY_SYMBOLS.map((s) => dataset.minuteBars(s).at(-1)!.close);

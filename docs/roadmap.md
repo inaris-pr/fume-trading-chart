@@ -65,12 +65,37 @@ Every stage also requires: `pnpm typecheck`, `pnpm test` and `pnpm format:check`
 
 **Stage 5: Real-time + preview deploy.** Alpaca stream adapter, stream hub, `/api/v1/stream`, live candles; preview deployment behind Access.
 
+**Stage 5 sequence (owner decision 2026-09-30).** Fume must support **multiple market-data providers**: Alpaca for US equities/ETFs now, and later a separate futures-capable provider for **GC, SI, CL, NQ, YM** (see "Multi-provider / futures direction" below). Stage 5 must not become architecturally tied to Alpaca as the only real-time provider, so the permanent streaming work is gated:
+
+| Step | Work                                                                                                 | Status                                    |
+| ---- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| A    | S2: Alpaca connection-limit spike                                                                    | ✅ done 2026-09-30 (research.md)          |
+| B    | S3: Durable Object lifecycle / outbound-WebSocket / cost gate                                        | ✅ done 2026-09-30 (research.md)          |
+| C    | Owner decision: Durable Object StreamHub vs single-tab fallback                                      | ✅ GO: DO hub primitive (ARCHITECTURE §6) |
+| D    | **Futures-provider + multi-provider streaming architecture checkpoint** (research + design, no code) | next (awaiting owner approval to start)   |
+| E    | Owner approval of the checkpoint design                                                              |                                           |
+| F    | Permanent real-time streaming implementation (Alpaca adapter behind the provider-neutral design)     |                                           |
+| G    | S4: provisional trade-built minute vs official minute bar observation                                |                                           |
+| H    | S7: Cloudflare Access + WebSocket-upgrade preview validation, as appropriate                         |                                           |
+
+**After S3 the permanent StreamHub is NOT built immediately**: steps C–E come first. The acceptance criteria below apply to step F onwards.
+
 - **First, the S3 gate** (ARCHITECTURE §6): a full-session DO run with a recorded duration-usage/cost extrapolation and your go/no-go. The implementation that follows is either the StreamHub DO or the single-tab fallback.
 - The active candle updates on every IEX trade on all timeframes. Official minute bars reconcile within about 2 s of the minute mark.
 - DO path: two browser tabs share one upstream connection (hub logs show one Alpaca socket; no 406). Fallback path: a second tab shows "open elsewhere", and a refresh reconnects without a lasting 406.
 - Killing the upstream socket (dev endpoint) → `resync` → the chart tail is corrected and no duplicate bars appear.
 - The upstream closes about 60 s after the last client disconnects (DO path).
 - Preview URL is unreachable without Access login, including the WS upgrade.
+
+**Multi-provider / futures direction (owner decision 2026-09-30; planning only, nothing implemented).**
+
+- **Target markets:** the actual futures, not ETF substitutes: Gold **GC**, Silver **SI**, Crude Oil **CL**, Nasdaq-100 **NQ**, Dow **YM**. GLD/SLV/USO/QQQ/DIA may remain supported as equities/ETFs, but they are **not** replacements for these markets.
+- **Provider boundary:** each provider gets its own adapter (URLs, payloads, auth, WebSocket messages, contract symbols, subscriptions stay inside it). Core, chart and web keep working only with normalized Fume types; the browser never talks to any provider.
+- **Futures requirements to preserve** (already modelled in `Instrument`; do not simplify futures into equity-style instruments): root symbol, contract month, expiration, tick size and tick value, contract multiplier, `contracts` as quantity unit, exchange/session metadata, overnight sessions, session breaks, sessions crossing midnight, futures-specific holidays/calendars, zero/negative prices where the instrument permits, provider-specific contract resolution. The model is redesigned only if a real provider proves something missing.
+- **Symbols vs contracts:** `NQ` names the root/product; what is displayed or traded generally resolves to a specific contract (a contract month). No specific current contract is hard-coded into core. Contract resolution and rollover policy are designed at the checkpoint; continuous futures are **not** implemented yet.
+- **Checkpoint research (step D) must compare at least:** CME / COMEX / NYMEX / CBOT data availability as applicable; real-time entitlement requirements; historical depth; WebSocket/streaming support; trade-level data; official bar availability; contract metadata; expiration/rollover support; continuous-contract support, if any; API rate limits; connection limits; pricing; redistribution/display restrictions; individual/non-professional exchange fees; paper-trading/broker integration possibilities; compatibility with Cloudflare Workers / Durable Objects; keeping credentials server-side. **No provider has been chosen.**
+- **Streaming implication:** the backend must be able to own provider-scoped upstream connections, potentially at the same time (Alpaca IEX + a futures feed). Do not assume one StreamHub = one Alpaca socket. See ARCHITECTURE §6.1.
+- **Scheduling:** a futures-provider stage is scheduled after the checkpoint; later stages are not renumbered now.
 
 **Stage 6: Paper trading.** Alpaca trading adapter, snapshot/orders/cancel/close routes, trade_updates via hub, order panel (buy/sell, market/limit, qty, limit price, buying power, position, open orders + cancel, close position).
 

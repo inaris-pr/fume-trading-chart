@@ -7,11 +7,12 @@ import type { Instrument } from './instrument.ts';
 import type {
   Bar,
   DataFeedInfo,
+  MarketChannel,
   MarketEvent,
   MarketSession,
   MarketSubscription,
 } from './market-data.ts';
-import type { ProviderError, ProviderId, UnixMs } from './primitives.ts';
+import type { InstrumentId, ProviderError, ProviderId, UnixMs } from './primitives.ts';
 import type { Account, Fill, Order, OrderRequest, Position, TradingEvent } from './trading.ts';
 
 export type StreamState =
@@ -86,13 +87,39 @@ export interface HistoricalMarketDataProvider {
    */
   readonly nativeIntervalsMinutes: readonly number[];
   resolveInstrument(symbol: string): Promise<Instrument | null>;
+  /**
+   * Loads an instrument by the backend-issued id this provider created (optional: providers whose
+   * ids map 1:1 to a symbol can rely on resolveInstrument).
+   */
+  getInstrument?(id: InstrumentId): Promise<Instrument | null>;
   getBars(request: BarPageRequest): Promise<BarPage>;
   getSessions(instrument: Instrument, from: UnixMs, to: UnixMs): Promise<readonly MarketSession[]>;
 }
 
+export interface OpenStreamOptions {
+  /**
+   * Do not connect upstream before this time (e.g. a persisted connection-conflict hold that must
+   * survive a hub restart, so two processes never fight over a single-connection feed).
+   */
+  notBefore?: UnixMs;
+}
+
+/**
+ * Streaming part of the market-data port. Implementations normalize whatever the provider sends
+ * (trades, per-second or per-minute aggregates) into MarketEvents; they must not assume trade-level
+ * data exists, and consumers must not assume it either.
+ */
+export interface StreamingMarketDataProvider {
+  readonly id: ProviderId;
+  readonly feed: DataFeedInfo;
+  /** Channels this stream can deliver (e.g. ['secondBars', 'minuteBars'] for an aggregate feed). */
+  readonly channels: readonly MarketChannel[];
+  openStream(handlers: MarketStreamHandlers, options?: OpenStreamOptions): MarketStream;
+}
+
 /** Full market-data port: history plus the live stream. */
 export interface MarketDataProvider extends HistoricalMarketDataProvider {
-  openStream(handlers: MarketStreamHandlers): MarketStream;
+  openStream(handlers: MarketStreamHandlers, options?: OpenStreamOptions): MarketStream;
 }
 
 export interface OrderQuery {

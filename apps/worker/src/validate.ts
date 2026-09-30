@@ -2,7 +2,13 @@
  * Query-parameter validation for the /api/v1 market-data routes. Every failure is a 400
  * invalid_request naming the field; nothing is coerced silently.
  */
-import { TIMEFRAMES, type InstrumentId, type TimeframeId, type UnixMs } from '@fume/core';
+import {
+  TIMEFRAMES,
+  type AssetClass,
+  type InstrumentId,
+  type TimeframeId,
+  type UnixMs,
+} from '@fume/core';
 import { invalidRequest } from './errors.ts';
 
 export const DEFAULT_BAR_LIMIT = 500;
@@ -20,14 +26,37 @@ export function parseSymbol(value: string | null): string {
   return symbol;
 }
 
+/** Asset class of a symbol to resolve: `equity` (default; ETFs included) or `future` (a root). */
+export function parseAssetClass(value: string | null): AssetClass {
+  if (value === null || value === '' || value === 'equity') return 'equity';
+  if (value === 'future') return 'future';
+  throw invalidRequest('assetClass must be "equity" or "future"', 'assetClass');
+}
+
 /**
- * Fume instrument ids are backend-issued ("eq:SPY"). Clients must not build them; the backend
- * parses its own format here. Only US equities ("eq:") exist in Stage 4.
+ * Fume instrument ids are backend-issued ("eq:SPY", "fut:NQ:2026-12"). Clients must not build
+ * them; the backend parses its own formats here. `symbol` is set for ids that map 1:1 to a symbol.
  */
-export function parseInstrumentId(value: string | null): { id: InstrumentId; symbol: string } {
-  const match = /^eq:([A-Z][A-Z0-9.]{0,9})$/.exec(value ?? '');
-  if (!match) throw invalidRequest('instrumentId is missing or malformed', 'instrumentId');
-  return { id: value as InstrumentId, symbol: match[1]! };
+export function parseInstrumentId(value: string | null): {
+  id: InstrumentId;
+  namespace: string;
+  symbol: string | null;
+} {
+  const raw = value ?? '';
+  const equity = /^eq:([A-Z][A-Z0-9.]{0,9})$/.exec(raw);
+  if (equity) return { id: raw as InstrumentId, namespace: 'eq', symbol: equity[1]! };
+  if (/^fut:[A-Z][A-Z0-9]{0,4}:\d{4}-(0[1-9]|1[0-2])$/.test(raw)) {
+    return { id: raw as InstrumentId, namespace: 'fut', symbol: null };
+  }
+  throw invalidRequest('instrumentId is missing or malformed', 'instrumentId');
+}
+
+/** Opaque stream-hub key (backend-issued, from /instruments/resolve). */
+export function parseStreamKey(value: string | null): string {
+  if (value === null || !/^[a-z0-9-]{1,32}$/.test(value)) {
+    throw invalidRequest('key is missing or malformed', 'key');
+  }
+  return value;
 }
 
 export function parseTimeframe(value: string | null): TimeframeId {

@@ -1,6 +1,6 @@
 /**
  * Repository secret scan: every tracked and untracked-but-not-ignored file. Fails on credential-
- * shaped strings, private keys, assigned Alpaca credential variables, or any local credential
+ * shaped strings, private keys, assigned Alpaca/Massive credential variables, or any local credential
  * VALUE from apps/worker/.dev.vars. Prints file:line and the rule name, never the matched text.
  */
 import { execFileSync } from 'node:child_process';
@@ -23,6 +23,11 @@ const rules = [
   {
     name: 'assigned Alpaca credential variable',
     pattern: /ALPACA_API_(KEY_ID|SECRET_KEY)\s*[=:]\s*['"]?[A-Za-z0-9/+]{8,}/,
+  },
+  {
+    name: 'assigned Massive credential variable',
+    // A literal value (like the Alpaca rule: identifiers such as TEST_MASSIVE_KEY do not match).
+    pattern: /MASSIVE_API_KEY\s*[=:]\s*['"]?[A-Za-z0-9]{12,}/,
   },
   {
     name: 'credential header with a literal value',

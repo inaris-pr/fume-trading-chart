@@ -1,4 +1,27 @@
-# WebSocket contract, v1 (draft)
+# WebSocket contract, v1
+
+**Implemented (Stage 5, futures feed):** `GET /api/v1/stream?key=<opaque stream key>` with
+`Upgrade: websocket`. The key comes from `/instruments/resolve` (`stream.key`); it selects the
+provider/feed-scoped hub (ARCHITECTURE §6.1). Implemented frames: `hello`, `subscribe`
+(`streams: ["market"]` only), `unsubscribe`, `ping` / `welcome`, `subscribed`, `unsubscribed`,
+`market`, `status`, `resync`, `pong`, `error`. Not implemented yet: the `trading` stream and its
+frames. Details specific to the implementation:
+
+- **Aggregate feeds.** The delayed futures feed has no trades: `market` carries
+  `bar` events with `interval: "1s"` (`phase: "provisional"`, the provider's per-second aggregate)
+  and `interval: "1m"` (`phase: "final"`, the authoritative minute). The client folds seconds into
+  the provisional minute and lets the minute replace it (docs/market-data.md).
+- **Hub reconciliation.** After every upstream reconnect the hub sends the last 30 min of completed
+  1-minute bars (REST) as `1m final` events. If that fails it sends `resync` instead.
+- **`seq`.** Per connection, +1 per frame from 1. A hub restart starts again at 1: the client treats
+  any other value (gap or restart) as a resync trigger.
+- **`status.market`** is a core `StreamState` with provider-neutral error fields only
+  (`code`, `message`, `retryable`, `reason`); e.g. `reason: "connection_conflict"` while a
+  single-connection feed is held by another process.
+- Errors: `invalid_request`, `unsupported_protocol` (then close 1002), `not_found` (instrument not
+  served by this stream), `symbol_limit` (10 subscriptions per connection), `unavailable`.
+
+The rest of this document is the original v1 design; where it differs, the notes above win.
 
 Endpoint: `wss://<host>/api/v1/stream`. The upgrade requires the same authentication as HTTP, and its `Origin` must be in `FUME_ALLOWED_ORIGINS` (see [security.md](security.md)). The Worker forwards the socket to the stream hub (the `StreamHub` DO, or the per-connection relay fallback; see ARCHITECTURE §6).
 

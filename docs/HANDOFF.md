@@ -2,15 +2,111 @@
 
 ## Current status
 
-**Stage 4 — Alpaca historical market data**
+**Current stage: Stage 5 — Real-time + preview deploy**
 
-Status: IMPLEMENTED · VALIDATED · VISUALLY APPROVED · COMMITTED · PUSHED · **PR NOT YET CREATED**
+Status: **S2 COMPLETE · S3 COMPLETE · DO hub GO · PERMANENT DELAYED-FUTURES STREAMING IMPLEMENTED
+(uncommitted, local only), AWAITING OWNER REVIEW**
 
-- Current branch: `stage-4/alpaca-historical-data` (pushed, tracks `origin`)
-- Stage 4 commit: `6dc388a988cffc13c37eb2a47e4051c5ba2ad2ee`
-- Current `main` / base: `61b27b1267b5dd3d7d4eca39c8b7b7cbca1ef988`
-- The working tree was clean before this handoff documentation was added (it is committed on the
-  same branch as a separate documentation-only commit).
+**Implementation (2026-09-30, owner instruction "proceed with building the platform"; licensing is
+handled separately before public launch and does not shape the architecture):**
+
+- Provider-neutral routing: `apps/worker/src/registry.ts` (equities/ETFs -> Alpaca IEX, futures ->
+  Massive Futures Starter), futures ids `fut:<ROOT>:<YYYY-MM>`, `/instruments/resolve?assetClass=future`.
+- Massive REST adapter (`providers/massive/`): root -> recommended contract from reference data +
+  delayed snapshot volume, explicit contract codes, 1-minute bars (cursor paging), schedules ->
+  sessions (de-duplicated; weekly Globex fallback outside coverage).
+- Massive delayed stream adapter (`A.`/`AM.` aggregates, numeric strings normalized, bounded
+  reconnect, `max_connections`/1008 -> `connection_conflict` hold) behind the core
+  `StreamingMarketDataProvider` port.
+- Feed-scoped Durable Object hub (`src/hub/`, `FeedHubObject`, one instance per stream key):
+  subscription union, fan-out, 60 s idle grace, REST reconciliation after reconnect, persisted
+  conflict hold, hibernatable sockets + attachments for reconstruction; `/api/v1/stream?key=`.
+- Core: `1s` bar events folded into the provisional minute; the provider minute is authoritative.
+- Web: futures roots in the selector (ES NQ YM GC SI CL, with friendly labels; DIA added to
+  Stocks & ETFs), contract chip (e.g. `NQZ6 · Dec 2026`),
+  "CME futures · Delayed ~10m" label from feed metadata, stream client + live handoff/resync.
+- Validated locally against the real delayed feed (wrangler dev, Durable Object local; nothing
+  deployed). Alpaca equities unchanged and history-only.
+
+**CURRENT PROVIDER DIRECTION (owner, 2026-09-30):**
+
+- **US equities / ETFs: Alpaca** (Stage 4 implementation unchanged; Massive Stocks not needed).
+- **Initial futures: Massive Futures Starter** ($29/month, already owned) for **GC, SI, CL, NQ,
+  YM**; data may be ~10 minutes delayed; real-time and trade-level futures are not required
+  initially. Intended provider, **pending Massive's written approval of the private Cloudflare
+  backend use**.
+- **Databento:** deferred as a researched fallback, not selected.
+- Reason: Alpaca already works and needs no extra stock-data subscription; Massive Starter was
+  locally proven sufficient for the delayed futures chart; removing a working provider only to
+  reduce vendors has no architectural benefit. Fume stays provider-neutral (no provider-specific
+  chart logic in the browser; ARCHITECTURE.md names no permanent provider).
+- **Approved conceptual futures model** (not implemented): Massive REST 1m aggregates → canonical
+  Fume 1m history; delayed WebSocket 1 s aggregates → provisional current minute; Massive 1m
+  aggregate → authoritative final/reconciled minute; Fume 1m → 5m / 15m / 1h / 4h / 1d. Reconnect:
+  reconnect → authenticate → resubscribe → REST 1m overlap → replace/reconcile recent bars → resume
+  1 s aggregates. Massive aggregate bars are authoritative for initial futures.
+- **Connection limit (observed):** all five futures fit on one WebSocket; a second connection with
+  the same key displaced the older one (`max_connections`, close 1008). Permanent design: one
+  centralized Massive provider/feed hub; no browser connections to Massive; dev processes must not
+  compete with a deployed hub; on 1008 back off and surface the conflict, never a reconnect fight.
+- **Cloud deployment of Massive data: BLOCKED PENDING WRITTEN MASSIVE CONFIRMATION.** Local
+  capability testing is complete (spike `apps/worker/spikes/massive-futures-starter/`,
+  NON-PRODUCTION). Details:
+  [research.md](research.md#product-direction-update--massive-futures-starter-capability-spike-2026-09-30-intended-futures-provider-cloud-blocked-pending-massive-licensing).
+- No permanent futures implementation exists.
+
+- The GO approves the DO hub **primitive** only. Preferred permanent topology after the futures
+  checkpoint: **provider/feed-scoped DO hubs** (one hub per provider feed); not implemented.
+- Required permanent-design constraints (disposable in-memory state, expected reconstruction,
+  resync + reconciliation after every reconnect, official bars authoritative, ~60 s idle close,
+  406 = bounded backoff, S4 shortfalls unresolved): ARCHITECTURE.md §6.
+- The temporary Cloudflare Worker `fume-s3-spike` and its secrets were deleted after S3.
+
+- Current branch: `stage-5/realtime-preview` (local only until the owner approves a push)
+- Base / `main`: `59899dacfb2b52b39db8da397fe391dd2f170909`
+- Stage 4: **MERGED via PR #4**; main squash commit `59899dacfb2b52b39db8da397fe391dd2f170909`.
+- Stage 4 historical Alpaca functionality is now the **frozen baseline**.
+
+## Stage 5 scope (from [roadmap.md](roadmap.md); roadmap is authoritative)
+
+- Alpaca real-time market-data stream adapter
+- backend stream hub
+- `/api/v1/stream`
+- real live candles
+- preview deployment behind Cloudflare Access
+
+Stage 5 must **not** jump straight into the full implementation. Required gates first:
+
+- **S2 — connection limit:** does Alpaca's one-connection limit apply per API key or per account,
+  and what exactly happens when a second IEX stream is opened (error 406? old socket dropped?).
+- **S3 — Durable Object gate:** outbound WebSocket from a DO, text/binary frames, auth timing,
+  disconnect/reconnect, lifecycle/eviction and duration cost. The roadmap requires a **go/no-go**
+  before committing to the StreamHub architecture (ARCHITECTURE.md §6).
+
+The eventual implementation follows **one** of: **A.** Durable Object StreamHub, or **B.** the
+approved single-tab fallback, decided by the S3 result.
+
+**Stage 5 sequence (owner decision 2026-09-30, roadmap is authoritative):** A. S2 ✅ → B. S3 ✅ →
+C. owner DO vs single-tab decision ✅ (GO: DO) → D. **futures-provider + multi-provider architecture
+checkpoint** → E. owner approval → F. permanent streaming implementation → G. S4 → H. S7.
+Reason: Fume will support multiple market-data providers: Alpaca for equities/ETFs and, later, a
+futures provider for **GC, SI, CL, NQ, YM** (actual futures, not ETF proxies such as
+GLD/SLV/USO/QQQ/DIA). Databento is preferred pending licensing confirmation (Massive fallback);
+no provider is locked in and nothing futures-related is implemented. See roadmap "Multi-provider / futures direction" and ARCHITECTURE §6.1. Later in Stage 5: **S4** (provisional
+IEX trade-built minute vs the official minute bar) and **S7** (Cloudflare Access including
+WebSocket upgrades, JWT verification in the Worker).
+
+## Stage 5 boundaries
+
+- Stage 4 history must keep working (no regression); Replay remains available.
+- The browser still never connects directly to Alpaca; credentials stay Worker/backend-only.
+- No trading, orders, positions or P&L in Stage 5; no Stage 6 work.
+- No permanent Durable Object architecture until the S3 go/no-go. Do not assume the DO path is
+  approved merely because it appears in the roadmap.
+- The streaming layer must stay provider-neutral: no "one StreamHub = one Alpaca socket" design;
+  provider specifics stay inside provider adapters.
+- No futures-provider code, no GC/SI/CL/NQ/YM in the UI, no fake futures data until the checkpoint
+  is approved.
 
 ## Completed stages
 
@@ -92,25 +188,23 @@ pnpm scan:bundle    # after pnpm build
 
 ## Exact next action
 
-Create **PR #4**: `stage-4/alpaca-historical-data` → `main`, title
-**`Stage 4: Alpaca historical market data`**. The PR includes the Stage 4 implementation plus this
-handoff documentation.
+**STOP: owner review of the uncommitted work** (not committed or pushed):
 
-After the owner squash-merges PR #4:
+1. Stage 5 delayed futures (ES, NQ, YM, GC, SI, CL) + DIA and selector labels (reviewed earlier).
+2. Milestone **headless session + DataFeed extraction** (docs/embedding.md): new
+   `@fume/datafeed` (`ChartSession`, `DataFeed`, `FumeApiDataFeed` with configurable base URL,
+   auth hook and WebSocket factory, one multiplexed stream connection per hub, `ReplayDataFeed`);
+   `apps/web` uses only package entry points; two-chart proof at
+   `?source=api&proof=two-charts` (NQ 5m + ES 1h on one stream connection). Replay behavior is
+   unchanged (whole-session pages, no clearing on switch); the one intentional change is the 30 s
+   idle close of the shared stream socket (docs/embedding.md).
 
-1. `git fetch origin`
-2. switch to `main`
-3. pull `origin/main` (fast-forward only)
-4. verify the Stage 4 content is present on `main` (tree/content comparison, not only ancestry)
-5. delete the local Stage 4 branch
-6. delete the remote Stage 4 branch and prune
-7. create the Stage 5 branch. `docs/roadmap.md` defines Stage 5's scope but does **not** name the
-   branch: follow the `stage-N/<scope>` convention and confirm the exact name with the owner.
-8. **Do not implement Stage 5 until explicitly instructed.**
+Local run: `pnpm dev:api` (Worker + Durable Object hub, needs the keys in
+`apps/worker/.dev.vars`), then `http://localhost:5173/?source=api&symbol=NQ&asset=future&tf=5m`.
+Only one process may hold the Massive connection.
 
-Stage 5 is expected to introduce real-time Alpaca market data / WebSockets and the related backend
-streaming architecture (with spikes S2–S4 and the S3 Durable Object cost gate), but
-[roadmap.md](roadmap.md) is authoritative for the exact scope.
+Not started (per the approved plan): `@fume/react`, theming, overlay/drawings/indicators, packaging
+(compiled builds), cross-origin backend auth, trading-platform integration.
 
 ## Recovery instructions
 

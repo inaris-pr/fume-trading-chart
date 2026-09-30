@@ -1,4 +1,7 @@
-# Copy to apps/worker/.dev.vars (gitignored) and fill in your Alpaca PAPER keys locally.
+# Copy to apps/worker/.dev.vars (gitignored) and fill in your keys locally.
 # Never commit .dev.vars, never paste the values into chat, logs or screenshots.
+# Alpaca PAPER keys (US equities/ETFs):
 ALPACA_API_KEY_ID=
 ALPACA_API_SECRET_KEY=
+# Massive futures key (delayed futures, backend only):
+MASSIVE_API_KEY=

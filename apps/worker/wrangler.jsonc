@@ -1,6 +1,7 @@
-// Fume Worker, Stage 4: LOCAL DEVELOPMENT ONLY. Do not deploy (no routes, workers.dev and
-// preview URLs disabled). Secrets are NOT configured here: ALPACA_API_KEY_ID and
-// ALPACA_API_SECRET_KEY come from apps/worker/.dev.vars (gitignored) during `wrangler dev`.
+// Fume Worker, Stage 5: LOCAL DEVELOPMENT ONLY. Do not deploy (no routes, workers.dev and
+// preview URLs disabled). Secrets are NOT configured here: ALPACA_API_KEY_ID,
+// ALPACA_API_SECRET_KEY and MASSIVE_API_KEY come from apps/worker/.dev.vars (gitignored) during
+// `wrangler dev`. The stream hubs are one Durable Object class, one instance per provider feed.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "fume-worker",
@@ -14,6 +15,12 @@
     "ALPACA_DATA_BASE_URL": "https://data.alpaca.markets",
     "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
     "ALPACA_DATA_FEED": "iex",
+    "MASSIVE_REST_BASE_URL": "https://api.massive.com",
+    "MASSIVE_FUTURES_STREAM_URL": "wss://delayed.massive.com/futures",
     "FUME_ALLOWED_ORIGINS": "http://localhost:5173",
   },
+  "durable_objects": {
+    "bindings": [{ "name": "FEED_HUB", "class_name": "FeedHubObject" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FeedHubObject"] }],
 }

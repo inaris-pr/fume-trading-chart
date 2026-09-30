@@ -1,64 +1,98 @@
 /**
- * Browser client for Fume's own backend. Talks ONLY to the relative `/api/v1` path (same origin;
- * the Vite dev server proxies it to the local Worker). It knows nothing about any market-data
- * provider: responses are validated against the provider-neutral @fume/core shapes, and a
- * malformed backend response fails with a clear FumeApiError instead of reaching the chart.
+ * HTTP client for Fume's own backend API (`/api/v1`). By default it talks to the relative
+ * `/api/v1` path of the page's origin (the Vite dev server proxies it to the local Worker); a host
+ * can point it at another base URL and add credentials through the auth hook. It knows nothing
+ * about any market-data provider: responses are validated against the provider-neutral
+ * @fume/core shapes, and a malformed backend response fails with a clear FumeApiError instead of
+ * reaching the chart.
  */
 import type {
-  Bar,
+  AssetClass,
   BarSeriesMeta,
+  Bar,
   Instrument,
   InstrumentId,
   MarketSession,
-  TimeframeId,
   UnixMs,
 } from '@fume/core';
+import { DataFeedError, type BarsPage, type BarsQuery } from '../types.ts';
 
+/** Default API base: same origin, relative. */
 export const API_BASE = '/api/v1';
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
-export class FumeApiError extends Error {
+/**
+ * Extra request headers for every API call (e.g. a bearer token from the host's session).
+ * Called per request, so a host can refresh tokens. Never logged by Fume.
+ */
+export type AuthHook = () => Record<string, string> | Promise<Record<string, string>>;
+
+export interface FumeHttpClientOptions {
+  /** API base, relative ("/api/v1", default) or absolute ("https://fume.example/api/v1"). */
+  baseUrl?: string;
+  fetch?: FetchLike;
+  getAuthHeaders?: AuthHook;
+}
+
+/** A non-2xx or malformed backend response (HTTP status kept for diagnostics). */
+export class FumeApiError extends DataFeedError {
+  readonly status: number;
+  readonly retryAfterMs: number | undefined;
+
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
-    readonly retryable: boolean,
-    readonly retryAfterMs?: number,
+    retryable: boolean,
+    retryAfterMs?: number,
+    reason?: string,
   ) {
-    super(message);
+    super(code, message, retryable, reason);
     this.name = 'FumeApiError';
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
-export interface BarsPage {
-  meta: BarSeriesMeta;
-  bars: Bar[];
-  hasMore: boolean;
-  serverTime: UnixMs;
-}
-
-export interface BarsQuery {
-  instrumentId: InstrumentId;
-  timeframe: TimeframeId;
-  /** Exclusive; omit for the latest candles. */
-  end?: UnixMs;
-  limit: number;
-  signal?: AbortSignal;
+export interface ResolveResult {
+  instrument: Instrument;
+  /** Opaque stream-hub key issued by the backend, or null (history only). */
+  streamKey: string | null;
 }
 
 export class FumeHttpClient {
+  readonly baseUrl: string;
   private readonly fetchImpl: FetchLike;
+  private readonly getAuthHeaders: AuthHook | null;
 
-  constructor(fetchImpl: FetchLike = (input, init) => globalThis.fetch(input, init)) {
-    this.fetchImpl = fetchImpl;
+  constructor(options: FumeHttpClientOptions | FetchLike = {}) {
+    const o = typeof options === 'function' ? { fetch: options } : options;
+    this.baseUrl = (o.baseUrl ?? API_BASE).replace(/\/+$/, '');
+    this.fetchImpl = o.fetch ?? ((input, init) => globalThis.fetch(input, init));
+    this.getAuthHeaders = o.getAuthHeaders ?? null;
   }
 
-  async resolveInstrument(symbol: string, signal?: AbortSignal): Promise<Instrument> {
-    const body = await this.get(`/instruments/resolve?${new URLSearchParams({ symbol })}`, signal);
+  /**
+   * Resolves a symbol of an asset class: an equity/ETF ticker (default) or a futures root such as
+   * "NQ", which the backend resolves to a specific contract.
+   */
+  async resolveInstrument(
+    symbol: string,
+    signal?: AbortSignal,
+    assetClass: AssetClass = 'equity',
+  ): Promise<ResolveResult> {
+    const query = new URLSearchParams({ symbol });
+    if (assetClass === 'future') query.set('assetClass', 'future');
+    const body = await this.get(`/instruments/resolve?${query}`, signal);
     const instrument = isRecord(body) ? body.instrument : undefined;
     if (!isInstrument(instrument)) throw malformed('instrument');
-    return instrument;
+    const stream = isRecord(body) ? body.stream : undefined;
+    const streamKey =
+      isRecord(stream) && typeof stream.key === 'string' && /^[a-z0-9-]{1,32}$/.test(stream.key)
+        ? stream.key
+        : null;
+    return { instrument, streamKey };
   }
 
   async getSessions(
@@ -103,9 +137,10 @@ export class FumeHttpClient {
   private async get(path: string, signal?: AbortSignal): Promise<unknown> {
     let response: Response;
     try {
-      response = await this.fetchImpl(`${API_BASE}${path}`, {
+      const auth = this.getAuthHeaders ? await this.getAuthHeaders() : {};
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         method: 'GET',
-        headers: { Accept: 'application/json' },
+        headers: { ...auth, Accept: 'application/json' },
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
@@ -126,12 +161,14 @@ export class FumeHttpClient {
     if (!response.ok) {
       const error = isRecord(body) && isRecord(body.error) ? body.error : null;
       const retryAfter = Number(response.headers.get('Retry-After'));
+      const details = isRecord(error?.details) ? error.details : null;
       throw new FumeApiError(
         response.status,
         typeof error?.code === 'string' ? error.code : 'internal',
         typeof error?.message === 'string' ? error.message : `HTTP ${response.status}`,
         error?.retryable === true,
         Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined,
+        typeof details?.reason === 'string' ? details.reason : undefined,
       );
     }
     return body;
@@ -180,7 +217,8 @@ function isMeta(v: unknown): v is BarSeriesMeta {
     typeof v.feed.providerId === 'string' &&
     typeof v.feed.feedId === 'string' &&
     typeof v.feed.consolidated === 'boolean' &&
-    isFiniteNumber(v.feed.delayMs)
+    isFiniteNumber(v.feed.delayMs) &&
+    (v.feed.displayName === undefined || typeof v.feed.displayName === 'string')
   );
 }
 

@@ -5,7 +5,10 @@
  * sessions and session mode). Each minute may hold:
  *   official           final or revised provider bar (highest precedence)
  *   providerProvisional a provider's in-progress minute bar
+ *   seconds             provider per-second aggregates (1s bar events), folded into the minute
  *   fromTrades          a minute built from individual trades
+ * Per-second aggregates never become official: the provider's 1m bar replaces them. Missing
+ * seconds are never fabricated; a re-delivered second (same start) replaces the stored one.
  * Canonical candles of any timeframe are re-folded from the effective minutes of the affected
  * buckets with the same aggregateBars() used for history, so bucket math exists once.
  */
@@ -17,6 +20,7 @@ import type { TimeScaleMapping } from '../time-scale.ts';
 import { BoundedKeySet, tradeIdentity } from './dedupe.ts';
 
 const MINUTE_MS = 60_000;
+const SECOND_MS = 1_000;
 
 /** Minute slots retained behind the newest event: two full days of 24h sessions. */
 export const DEFAULT_RETENTION_MINUTES = 2 * 1440;
@@ -45,6 +49,13 @@ export interface LiveDiagnostics {
   uncoveredBuckets: number;
   /** Events for other instruments, session-level bars and non-candle events. */
   ignoredEvents: number;
+  acceptedSecondBars: number;
+  /** A second already stored for that minute was delivered again and replaced (idempotent). */
+  replacedSecondBars: number;
+  /** Second bars for a minute that already has an official bar (the official bar wins). */
+  secondsAfterOfficial: number;
+  /** Second bars outside every open window of the minute mapping. */
+  outsideSessionSeconds: number;
 }
 
 interface TradeAccumulator {
@@ -64,6 +75,8 @@ interface MinuteState {
   start: UnixMs;
   official?: { bar: Bar; rank: 1 | 2 };
   providerProvisional?: Bar;
+  /** Per-second provider aggregates keyed by second start. */
+  seconds?: Map<UnixMs, Bar>;
   fromTrades?: TradeAccumulator;
 }
 
@@ -88,6 +101,10 @@ export class LiveCandleAggregator {
     eventsOutsideRetention: 0,
     uncoveredBuckets: 0,
     ignoredEvents: 0,
+    acceptedSecondBars: 0,
+    replacedSecondBars: 0,
+    secondsAfterOfficial: 0,
+    outsideSessionSeconds: 0,
   };
 
   constructor(options: LiveAggregatorOptions) {
@@ -133,7 +150,7 @@ export class LiveCandleAggregator {
     return [...changed].sort((a, b) => a - b);
   }
 
-  /** Effective bar for one minute: official > provider provisional > trade-built. */
+  /** Effective bar for one minute: official > provider provisional > seconds > trade-built. */
   effectiveMinute(start: UnixMs): Bar | null {
     const slot = this.minuteScale.toSlot(start);
     if (slot === null || !Number.isInteger(slot)) return null;
@@ -188,7 +205,9 @@ export class LiveCandleAggregator {
       return this.applyTrade(event.trade);
     }
     if (event.kind === 'bar') {
-      if (event.instrumentId !== this.instrumentId || event.interval !== '1m') return this.ignore();
+      if (event.instrumentId !== this.instrumentId) return this.ignore();
+      if (event.interval === '1s') return this.applySecond(event.bar);
+      if (event.interval !== '1m') return this.ignore();
       if (event.phase === 'provisional') return this.applyProviderProvisional(event.bar);
       return this.applyOfficial(event.bar, event.phase === 'revised' ? 2 : 1);
     }
@@ -255,6 +274,40 @@ export class LiveCandleAggregator {
       acc.tradeCount += 1;
     }
     this.diag.acceptedTrades++;
+    return state.start;
+  }
+
+  private applySecond(bar: Bar): UnixMs | null {
+    if (
+      bar.start % SECOND_MS !== 0 ||
+      !Number.isFinite(bar.open) ||
+      !Number.isFinite(bar.high) ||
+      !Number.isFinite(bar.low) ||
+      !Number.isFinite(bar.close) ||
+      !(bar.volume >= 0)
+    ) {
+      return this.ignore();
+    }
+    const slotValue = this.minuteScale.toSlot(bar.start);
+    if (slotValue === null) {
+      this.diag.outsideSessionSeconds++;
+      return null;
+    }
+    const slot = Math.floor(slotValue);
+    if (!this.isRetainable(slot)) {
+      this.diag.eventsOutsideRetention++;
+      return null;
+    }
+    const state = this.stateFor(slot);
+    if (bar.start + SECOND_MS > this.highWaterMs) this.highWaterMs = bar.start + SECOND_MS;
+    if (state.official) {
+      this.diag.secondsAfterOfficial++;
+      return null;
+    }
+    state.seconds ??= new Map();
+    if (state.seconds.has(bar.start)) this.diag.replacedSecondBars++;
+    else this.diag.acceptedSecondBars++;
+    state.seconds.set(bar.start, { ...bar, status: 'provisional' });
     return state.start;
   }
 
@@ -376,6 +429,7 @@ export class LiveCandleAggregator {
 function effectiveBar(state: MinuteState): Bar | null {
   if (state.official) return state.official.bar;
   if (state.providerProvisional) return state.providerProvisional;
+  if (state.seconds && state.seconds.size > 0) return foldSeconds(state.start, state.seconds);
   const acc = state.fromTrades;
   if (!acc) return null;
   return {
@@ -386,6 +440,36 @@ function effectiveBar(state: MinuteState): Bar | null {
     close: acc.close,
     volume: acc.volume,
     tradeCount: acc.tradeCount,
+    status: 'provisional',
+    revision: 0,
+  };
+}
+
+/** Folds per-second bars into a provisional minute (open first, close last, H/L extremes, Σ volume). */
+function foldSeconds(start: UnixMs, seconds: ReadonlyMap<UnixMs, Bar>): Bar {
+  const ordered = [...seconds.values()].sort((a, b) => a.start - b.start);
+  const first = ordered[0]!;
+  let high = first.high;
+  let low = first.low;
+  let volume = 0;
+  let tradeCount: number | undefined = 0;
+  for (const s of ordered) {
+    if (s.high > high) high = s.high;
+    if (s.low < low) low = s.low;
+    volume += s.volume;
+    tradeCount =
+      tradeCount === undefined || s.tradeCount === undefined
+        ? undefined
+        : tradeCount + s.tradeCount;
+  }
+  return {
+    start,
+    open: first.open,
+    high,
+    low,
+    close: ordered[ordered.length - 1]!.close,
+    volume,
+    ...(tradeCount !== undefined ? { tradeCount } : {}),
     status: 'provisional',
     revision: 0,
   };

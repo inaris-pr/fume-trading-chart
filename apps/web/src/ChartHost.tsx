@@ -1,51 +1,56 @@
 import { useEffect, useRef, useState } from 'react';
-import { FumeChart, type FollowingLatestState, type OlderDataRequest } from '@fume/chart';
-import type { MarketDataProvider, TimeframeId } from '@fume/core';
-import { LiveChartController } from './live/chart-controller.ts';
+import { FumeChart, type FollowingLatestState } from '@fume/chart';
+import type { AssetClass, StreamState, TimeframeId } from '@fume/core';
 import {
-  HistoricalChartController,
-  type HistoryClient,
-  type HistoryStatus,
-} from './history/historical-controller.ts';
-
-/**
- * Where candles come from:
- * - replay: the deterministic in-browser replay provider (live ticks, Stage 3);
- * - api: canonical history from Fume's backend over HTTP (Stage 4; no live ticks).
- */
-export type ChartSource =
-  { kind: 'replay'; provider: MarketDataProvider } | { kind: 'api'; client: HistoryClient };
-
-/** What ChartHost needs from either controller. */
-interface ChartController {
-  select(symbol: string, timeframe: TimeframeId): Promise<void>;
-  setTimeframe(timeframe: TimeframeId): Promise<void>;
-  requestOlderData(request: OlderDataRequest): Promise<void>;
-  dispose(): void;
-}
+  ChartSession,
+  type ChartSessionSettings,
+  type ChartStatus,
+  type DataFeed,
+} from '@fume/datafeed';
 
 export interface ChartHostProps {
-  source: ChartSource;
+  /** Where candles come from (shared by every chart on the page). */
+  datafeed: DataFeed;
   symbol: string;
+  /** Asset class of `symbol`: equity ticker (default) or futures root. */
+  assetClass?: AssetClass;
   timeframe: TimeframeId;
-  /** History status (api source only). */
-  onStatus?: (status: HistoryStatus) => void;
+  onStatus?: (status: ChartStatus) => void;
+  /** Live connection health of the displayed instrument (null = history only). */
+  onStreamState?: (state: StreamState | null) => void;
+  /** ChartSession settings (read when the chart is created). */
+  settings?: ChartSessionSettings;
+  /** Dev-only QA handle suffix (window.__fumeChart<suffix>, __fumeSession<suffix>). */
+  devName?: string;
 }
 
 /**
- * Hosts the framework-independent FumeChart and a framework-free controller. React only provides
- * the container, creates/destroys both, and forwards symbol/timeframe selections. Candle math,
- * live updates, zoom, pan, crosshair and rendering never go through React state.
+ * Hosts the framework-independent FumeChart and a headless ChartSession (@fume/datafeed). React
+ * only provides the container, creates/destroys both, and forwards symbol/timeframe selections.
+ * Candle math, live updates, zoom, pan, crosshair and rendering never go through React state.
  */
-export function ChartHost({ source, symbol, timeframe, onStatus }: ChartHostProps) {
+export function ChartHost({
+  datafeed,
+  symbol,
+  assetClass = 'equity',
+  timeframe,
+  onStatus,
+  onStreamState,
+  settings,
+  devName = '',
+}: ChartHostProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const controllerRef = useRef<ChartController | null>(null);
+  const sessionRef = useRef<ChartSession | null>(null);
   const chartRef = useRef<FumeChart | null>(null);
   // Only changes when the live-follow state or the plot corner moves (rare), not per frame.
   const [follow, setFollow] = useState<FollowingLatestState | null>(null);
-  const shownRef = useRef<{ symbol: string; timeframe: TimeframeId } | null>(null);
-  const latest = useRef({ symbol, timeframe, onStatus });
-  latest.current = { symbol, timeframe, onStatus };
+  const shownRef = useRef<{
+    symbol: string;
+    assetClass: AssetClass;
+    timeframe: TimeframeId;
+  } | null>(null);
+  const latest = useRef({ symbol, assetClass, timeframe, onStatus, onStreamState, settings });
+  latest.current = { symbol, assetClass, timeframe, onStatus, onStreamState, settings };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -57,44 +62,48 @@ export function ChartHost({ source, symbol, timeframe, onStatus }: ChartHostProp
       formatTime: () => '',
       minPriceStep: 0.01,
     });
-    const controller: ChartController =
-      source.kind === 'replay'
-        ? new LiveChartController({ provider: source.provider, chart })
-        : new HistoricalChartController({
-            client: source.client,
-            chart,
-            onStatus: (status) => latest.current.onStatus?.(status),
-          });
+    const session = new ChartSession({
+      datafeed,
+      chart,
+      onStatus: (status) => latest.current.onStatus?.(status),
+      onStreamState: (state) => latest.current.onStreamState?.(state),
+      ...(latest.current.settings ? { settings: latest.current.settings } : {}),
+    });
     chart.setOptions({
-      onNeedsOlderData: (request) => void controller.requestOlderData(request),
+      onNeedsOlderData: (request) => void session.requestOlderData(request),
       onFollowingLatestChange: setFollow,
     });
-    controllerRef.current = controller;
+    sessionRef.current = session;
     chartRef.current = chart;
-    const { symbol: s, timeframe: tf } = latest.current;
-    shownRef.current = { symbol: s, timeframe: tf };
-    void controller.select(s, tf);
+    const { symbol: s, assetClass: ac, timeframe: tf } = latest.current;
+    shownRef.current = { symbol: s, assetClass: ac, timeframe: tf };
+    void session.select(s, tf, ac);
     // Dev-only QA handles (stripped from production builds).
-    if (import.meta.env.DEV)
-      Object.assign(window, { __fumeChart: chart, __fumeController: controller });
+    if (import.meta.env.DEV) {
+      Object.assign(window, {
+        [`__fumeChart${devName}`]: chart,
+        [`__fumeSession${devName}`]: session,
+      });
+    }
     return () => {
-      controller.dispose();
+      session.dispose();
       chart.destroy();
-      controllerRef.current = null;
+      sessionRef.current = null;
       chartRef.current = null;
       shownRef.current = null;
       setFollow(null);
     };
-  }, [source]);
+  }, [datafeed, devName]);
 
   useEffect(() => {
-    const controller = controllerRef.current;
+    const session = sessionRef.current;
     const shown = shownRef.current;
-    if (!controller || !shown) return;
-    if (shown.symbol !== symbol) void controller.select(symbol, timeframe);
-    else if (shown.timeframe !== timeframe) void controller.setTimeframe(timeframe);
-    shownRef.current = { symbol, timeframe };
-  }, [symbol, timeframe]);
+    if (!session || !shown) return;
+    if (shown.symbol !== symbol || shown.assetClass !== assetClass) {
+      void session.select(symbol, timeframe, assetClass);
+    } else if (shown.timeframe !== timeframe) void session.setTimeframe(timeframe);
+    shownRef.current = { symbol, assetClass, timeframe };
+  }, [symbol, assetClass, timeframe]);
 
   return (
     <div className="chart-frame">
@@ -103,7 +112,7 @@ export function ChartHost({ source, symbol, timeframe, onStatus }: ChartHostProp
         <button
           type="button"
           className="go-latest"
-          title="Go to latest bar"
+          title="Go to latest bar (the newest data the feed has)"
           aria-label="Go to latest bar"
           style={{ right: follow.plotCorner.right + 10, bottom: follow.plotCorner.bottom + 10 }}
           onClick={() => chartRef.current?.goToLatest()}

@@ -1,14 +1,26 @@
 import { describe, expect, test } from 'vitest';
 import type { ChartData, PrependOptions } from '@fume/chart';
-import type { Bar, BarPage, BarPageRequest, MarketDataProvider } from '@fume/core';
+/**
+ * ChartSession over the deterministic ReplayDataFeed (the former replay controller's scenarios):
+ * history then live trade-driven candles, buffering during load, symbol/timeframe switches,
+ * paging, dispose, determinism, and live minutes matching the official ones.
+ */
+import type { Bar } from '@fume/core';
 import {
   ManualScheduler,
   REPLAY_START_MS,
   ReplayDataset,
   ReplayMarketDataProvider,
 } from '@fume/replay';
-import { LiveChartController, type ChartSink } from '../src/live/chart-controller.ts';
-import { HISTORY_SESSIONS } from '../src/timeframes.ts';
+import {
+  aggregateBars,
+  createSessionTimeScale,
+  slotSpecForTimeframe,
+  type TimeframeId,
+} from '@fume/core';
+import { REPLAY_SESSIONS_PER_PAGE, ReplayDataFeed } from '../src/replay/replay-feed.ts';
+import { ChartSession } from '../src/session.ts';
+import type { BarsQuery, ChartSink } from '../src/types.ts';
 
 const dataset = new ReplayDataset();
 const nyTime = (t: number) =>
@@ -39,24 +51,85 @@ class RecordingChart implements ChartSink {
   get last(): ChartData {
     return this.setDataCalls.at(-1)!;
   }
+  /** setData calls that carried bars (a switch first clears the chart). */
+  get loads(): ChartData[] {
+    return this.setDataCalls.filter((d) => d.bars.length > 0);
+  }
 }
 
 function setup(speed = 60) {
   const scheduler = new ManualScheduler();
   const provider = new ReplayMarketDataProvider({ dataset, scheduler, speed, tickMs: 50 });
   const chart = new RecordingChart();
-  const controller = new LiveChartController({ provider, chart, delay: async () => {} });
-  return { scheduler, provider, chart, controller };
+  const datafeed = new ReplayDataFeed({ provider, olderPageDelayMs: 0 });
+  // The standalone app's replay settings: previous candles stay until the new data is ready.
+  const controller = new ChartSession({ datafeed, chart, settings: { clearOnSwitch: false } });
+  return { scheduler, provider, datafeed, chart, controller };
 }
 
-describe('LiveChartController', () => {
+describe('ChartSession + ReplayDataFeed', () => {
+  test('parity: history = the newest N WHOLE sessions of official minutes, aggregated by core', async () => {
+    for (const tf of ['1m', '5m', '1h', '1d'] as TimeframeId[]) {
+      const { provider, chart, controller } = setup();
+      await controller.select('SPY', tf);
+      const instrument = provider.dataset.instrument('SPY')!;
+      const now = provider.marketNow();
+      const sessions = (await provider.getSessions(instrument, 0, Number.MAX_SAFE_INTEGER)).filter(
+        (s) =>
+          s.windows[0]!.start < now + 1 &&
+          s.sessionDate >= provider.dataset.dataSessions[0]!.sessionDate,
+      );
+      const picked = sessions.slice(-REPLAY_SESSIONS_PER_PAGE[tf]);
+      const from = picked[0]!.windows.find((w) => w.kind === 'regular')!.start;
+      let minutes: Bar[] = [];
+      for (let end = now + 1; ;) {
+        const page = await provider.getBars({
+          instrument,
+          intervalMinutes: 1,
+          start: from,
+          end,
+          limit: 10_000,
+        });
+        minutes = [...page.bars, ...minutes];
+        if (!page.hasMore || page.bars.length === 0 || page.bars[0]!.start <= from) break;
+        end = page.bars[0]!.start;
+      }
+      minutes = minutes.filter((m) => m.start >= from);
+      const mapping = createSessionTimeScale({
+        sessions: picked,
+        sessionMode: 'regular',
+        slot: slotSpecForTimeframe(tf),
+      });
+      const expected = aggregateBars({
+        bars: minutes,
+        sourceDurationMs: 60_000,
+        target: mapping,
+      }).bars;
+      const shown = chart.last.bars;
+      expect(shown.map((b) => [b.start, b.open, b.high, b.low, b.close, b.volume])).toEqual(
+        expected.map((b) => [b.start, b.open, b.high, b.low, b.close, b.volume]),
+      );
+      controller.dispose();
+    }
+  });
+
+  test('switching keeps the previous candles on screen until the new ones are ready (no clear)', async () => {
+    const { chart, controller } = setup();
+    await controller.select('SPY', '5m');
+    await controller.select('NVDA', '5m');
+    await controller.setTimeframe('1h');
+    expect(chart.setDataCalls.every((d) => d.bars.length > 0)).toBe(true);
+    expect(chart.setDataCalls).toHaveLength(3);
+    controller.dispose();
+  });
+
   test('select: history first, then live upserts of the active candle', async () => {
     const { scheduler, chart, controller } = setup();
     await controller.select('SPY', '1m');
-    expect(chart.setDataCalls).toHaveLength(1);
+    expect(chart.setDataCalls).toHaveLength(1); // no clearing call before the data
     const history = chart.last.bars;
     expect(history.at(-1)!.start).toBeLessThan(REPLAY_START_MS);
-    expect(history.length).toBeGreaterThan(HISTORY_SESSIONS['1m'] * 300);
+    expect(history.length).toBeGreaterThan(REPLAY_SESSIONS_PER_PAGE['1m'] * 300);
     scheduler.advance(3_000); // 3 market minutes
     const upserts = chart.upserts.flat();
     expect(upserts.length).toBeGreaterThan(20);
@@ -72,22 +145,15 @@ describe('LiveChartController', () => {
     const provider = new ReplayMarketDataProvider({ dataset, scheduler, speed: 60, tickMs: 50 });
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
-    const slow: MarketDataProvider = {
-      ...provider,
-      id: provider.id,
-      feed: provider.feed,
-      nativeIntervalsMinutes: provider.nativeIntervalsMinutes,
-      resolveInstrument: (s) => provider.resolveInstrument(s),
-      getSessions: (i, f, t) => provider.getSessions(i, f, t),
-      openStream: (h) => provider.openStream(h),
-      getBars: async (r: BarPageRequest): Promise<BarPage> => {
-        const page = await provider.getBars(r);
-        await gate;
-        return page;
-      },
+    const datafeed = new ReplayDataFeed({ provider, olderPageDelayMs: 0 });
+    const getBars = datafeed.getBars.bind(datafeed);
+    datafeed.getBars = async (q: BarsQuery) => {
+      const page = await getBars(q);
+      await gate;
+      return page;
     };
     const chart = new RecordingChart();
-    const controller = new LiveChartController({ provider: slow, chart, delay: async () => {} });
+    const controller = new ChartSession({ datafeed, chart, settings: { clearOnSwitch: false } });
     const loading = controller.select('SPY', '1m');
     await Promise.resolve();
     await Promise.resolve();
@@ -97,7 +163,7 @@ describe('LiveChartController', () => {
     const bars = chart.last.bars;
     // The minutes that traded during loading are already in the first setData.
     expect(bars.some((b) => b.start === REPLAY_START_MS)).toBe(true);
-    expect(controller.state()!.diagnostics.acceptedTrades).toBeGreaterThan(0);
+    expect(controller.state()!.liveDiagnostics!.acceptedTrades).toBeGreaterThan(0);
     controller.dispose();
   });
 
@@ -125,18 +191,17 @@ describe('LiveChartController', () => {
     controller.dispose();
   });
 
-  test('timeframe switch re-aggregates the same minute state; live upserts are canonical 4H buckets', async () => {
+  test('timeframe switch reloads canonical 4H candles; live upserts are canonical 4H buckets', async () => {
     const { scheduler, chart, controller } = setup();
     await controller.select('SPY', '1m');
     scheduler.advance(2_000);
-    const minutesBefore = controller.state()!.minutes;
     await controller.setTimeframe('4h');
-    expect(chart.setDataCalls).toHaveLength(2);
+    expect(chart.setDataCalls).toHaveLength(2); // the 1m candles stayed until the 4H ones replaced them
     const fourH = chart.last.bars;
     expect(fourH.map((b) => nyTime(b.start)).every((t) => t === '09:30' || t === '13:30')).toBe(
       true,
     );
-    expect(controller.state()!.minutes).toBeGreaterThanOrEqual(minutesBefore);
+    expect(controller.state()!.timeframe).toBe('4h');
     const mark = chart.upserts.length;
     scheduler.advance(2_000);
     const upserts = chart.upserts.slice(mark).flat();
@@ -152,9 +217,11 @@ describe('LiveChartController', () => {
     await controller.requestOlderData({ before: oldest });
     expect(chart.prepends).toHaveLength(1);
     const { bars, options } = chart.prepends[0]!;
-    expect(bars.length).toBeGreaterThan(20 * HISTORY_SESSIONS['15m']);
+    expect(bars.length).toBeGreaterThan(20 * REPLAY_SESSIONS_PER_PAGE['15m']);
     expect(bars.every((b) => b.start < oldest)).toBe(true);
-    expect(options).toEqual({ hasMore: true });
+    // Whole sessions: the older page ends with the previous session's last bucket.
+    expect(nyTime(bars.at(-1)!.start)).toBe('15:45');
+    expect(options).toMatchObject({ hasMore: true });
   });
 
   test('older data when nothing older exists resolves with hasMore=false', async () => {
@@ -183,7 +250,7 @@ describe('LiveChartController', () => {
       for (let i = 0; i < 30; i++) scheduler.advance(173);
       controller.dispose();
       return JSON.stringify({
-        data: chart.setDataCalls.map((d) => d.bars),
+        data: chart.loads.map((d) => d.bars),
         upserts: chart.upserts,
       });
     };

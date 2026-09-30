@@ -67,9 +67,11 @@ fume-trading-chart/
 │  │             time scale, canonical + live candle aggregation, EventTime; later the order
 │  │             state machine and P&L). No DOM, no provider code.
 │  ├─ chart/     @fume/chart: Canvas chart engine (Stage 1). Depends on nothing provider-specific.
-│  └─ replay/    @fume/replay: deterministic ReplayMarketDataProvider (Stage 3). Offline.
+│  ├─ replay/    @fume/replay: deterministic ReplayMarketDataProvider (Stage 3). Offline.
+│  └─ datafeed/  @fume/datafeed: headless ChartSession + DataFeed contract, FumeApiDataFeed
+│                (HTTP + one multiplexed stream per hub), ReplayDataFeed (docs/embedding.md).
 ├─ apps/
-│  ├─ web/       Vite + React shell: <ChartHost>, order panel, FumeClient (Stage 1+)
+│  ├─ web/       Vite + React shell: <ChartHost> (FumeChart + ChartSession), app chrome only
 │  └─ worker/    Cloudflare Worker + StreamHub DO + provider adapters (Stage 4+)
 │     └─ src/providers/{alpaca,replay}/
 ├─ docs/         contracts, designs, research, roadmap
@@ -83,7 +85,8 @@ Only `packages/core` exists after Stage 0. Other folders are created in the stag
 - `core` → nothing.
 - `chart` → `core`, **type-only** (approved at Stage 1 review, 2026-09-29). `@fume/chart` may `import type` canonical domain contracts from `@fume/core`, such as `Bar`, `TimeScaleMapping` and the formatter/domain types, so the chart consumes the Stage 0 model instead of a second candle model. It must **not** gain a runtime dependency on `@fume/core`: no value imports, and `@fume/core` stays a `devDependency` of the chart package, used only for type resolution. Changing this needs an explicit architecture review. Enforced by `test/boundaries.test.ts`.
 - `replay` → `core` (runtime). A provider adapter; it implements the core `MarketDataProvider` port. Core and chart never import it.
-- `web` → `core`, `chart`, `replay`, and Fume's own HTTP API (relative `/api/v1` only; never a provider host).
+- `datafeed` → `core`, `replay` (runtime), `chart` (**type-only**). Framework-free and provider-neutral; the only network code is its Fume API client (`fetch`) and stream connection (`WebSocket`), with a configurable base URL, auth hook and socket factory. Core, chart and replay never import it.
+- `web` → `core`, `chart`, `datafeed`, `replay`, only through their public entry points; it makes no network calls itself (the DataFeed does, to Fume's `/api/v1`, never a provider host).
 - `worker` → `core` (runtime), `wrangler` (dev only). Provider payload types, hosts and header names live only in `apps/worker/src/providers/<provider>/`.
 - Nothing imports from `worker/src/providers/*` except the Worker's composition root.
 
@@ -291,6 +294,83 @@ Consequences:
 
 Stages 1–4 need no DO in either case.
 
+**OWNER DECISION (2026-09-30): GO — Durable Objects approved as the shared real-time hub
+primitive.** This approves the hub _primitive_, not the permanent topology, which waits for the
+futures-provider / multi-provider checkpoint. **Checkpoint outcome (2026-09-30):** the preferred
+topology is **provider/feed-scoped DO hubs** (one hub per provider feed, each owning its own
+upstream, subscriptions, limits, reconstruction and resync); it is not implemented and is confirmed
+when permanent streaming is approved (§6.1).
+
+Evidence (S3, [research.md](docs/research.md)): one Alpaca upstream served multiple downstream
+clients; Run B stayed live beyond 15 minutes while a downstream client was connected; natural
+reconstruction and a redeploy each released the Alpaca slot cleanly; no 406 race observed; forced
+upstream recovery ~1.1 s; the ~60 s no-client upstream close worked; measured single-hub usage
+fits the Free-plan duration allowance for the tested patterns.
+
+**Required permanent-design constraints:**
+
+1. Durable Object in-memory state is disposable.
+2. Reconstruction must be expected (eviction ~15 min after the last request with only an
+   outbound socket; hibernation shortly after going idle; every deploy).
+3. State needed across reconstruction must be persisted or recoverable.
+4. After every upstream reconnect or reconstruction: re-authenticate, re-subscribe, perform a
+   bounded recent-history resync, and reconcile with official bars.
+5. Streamed trades are best-effort / provisional.
+6. Official bars remain authoritative for reconciliation.
+7. Keep the ~60 s last-client idle close unless later evidence justifies changing it.
+8. `406` means the provider slot is still occupied: bounded backoff, never a tight retry loop.
+9. The two observed minute-count shortfalls (S3) remain unresolved and belong to S4.
+10. Their cause is **not** known and must not be described as known.
+
+### 6.1 Multi-provider routing and feed-scoped stream hubs (Stage 5, implemented 2026-09-30, uncommitted)
+
+**Routing (Worker, provider-neutral).** `apps/worker/src/registry.ts` registers one market-data
+FEED per asset class; only the composition root (`src/index.ts`) names providers:
+
+| Feed                              | Asset classes | Instrument ids   | History (1m base bars) | Stream key (opaque) |
+| --------------------------------- | ------------- | ---------------- | ---------------------- | ------------------- |
+| Alpaca IEX (Stage 4, unchanged)   | equity, etf   | `eq:SPY`         | `providers/alpaca`     | none (history only) |
+| Massive Futures Starter (delayed) | future        | `fut:NQ:2026-12` | `providers/massive`    | `futures-delayed`   |
+
+The router resolves symbols by asset class (`/instruments/resolve?symbol=NQ&assetClass=future`),
+loads instruments by id namespace, and serves bars/sessions through the instrument's
+`marketDataRef.providerId`. The browser only ever sees provider-neutral `Instrument`s,
+`DataFeedInfo` (with `delayMs`) and an opaque stream key. Brokerage stays a separate port.
+
+**Hubs.** One Durable Object class (`FeedHubObject`), **one instance per stream key** (per provider
+feed); Alpaca and Massive are never combined in one object. Each instance runs a provider-neutral
+`FeedHub` (`src/hub/feed-hub.ts`):
+
+```
+browser tabs --ws /api/v1/stream?key=futures-delayed--> Worker (origin + auth) --> FeedHubObject("futures-delayed")
+                                                                                  └─ ONE upstream (delayed futures WebSocket)
+```
+
+- **Subscription union:** clients subscribe Fume instrument ids; the hub reference-counts them and
+  applies the union declaratively to the single upstream (`A.<contract>`/`AM.<contract>` for the
+  futures feed). Last subscription gone -> upstream closed after a 60 s idle grace (S3).
+- **Fan-out:** normalized `MarketEvent`s only to the clients subscribed to that instrument.
+- **Recovery:** after every upstream (re)connect the hub re-fetches the last 30 min of COMPLETED
+  1-minute bars (in delayed time) from REST and sends them as authoritative `1m final` bars. No
+  stream replay is assumed. REST failure -> clients get `resync` and re-fetch the tail themselves.
+- **Single-connection feeds:** a displaced upstream (`max_connections` / close 1008) becomes
+  reason `connection_conflict` with a 60 s .. 15 min hold; the hold is persisted in DO storage so a
+  reconstructed hub does not fight the other process; clients see "feed in use elsewhere".
+- **Reconstruction:** in-memory state is disposable. Downstream sockets use the Hibernation API;
+  their attachments hold each client's subscriptions, so a new instance rebuilds the union from
+  `getWebSockets()`, reconnects upstream and tells clients to resync. The stream key is persisted.
+- **Stream ports:** core `StreamingMarketDataProvider` (channels declared per feed). Feeds without
+  trades deliver `bar` events with `interval: '1s'` (provisional) and `'1m'` (final); consumers
+  never assume trade-level data.
+
+**Client.** `apps/web/src/api/stream-client.ts` connects only to the page's own
+`/api/v1/stream`; `HistoricalChartController` does the documented handoff (history + 1m seed +
+buffered events -> `LiveCandleAggregator`) and re-fetches the tail after reconnects, sequence gaps
+and hub restarts. Delay is shown from `DataFeedInfo.delayMs` ("Delayed ~10m"), never "live".
+
+**Not in this build:** Alpaca streaming (equities stay history-only), deployment (local
+`wrangler dev` only; Durable Objects run locally).
+
 ## 7. Decision: database (**NO**)
 
 The MVP has no application-owned data that must persist:
@@ -305,6 +385,29 @@ We'd reconsider only for a real requirement: an app-owned audit log of submitted
 ## 8. Futures readiness
 
 The core model already carries what futures need (`packages/core/src/instrument.ts`): tick rules, fractional price formats, a contract multiplier, a session spec whose windows can cross midnight, a session date that belongs to the _ending_ day, a `future` block (root, contract month, expiration, tick value), and separate market-data and brokerage provider refs. A futures provider plugs in as another `MarketDataProvider` / `BrokerageProvider` pair.
+
+**Implemented (Stage 5, 2026-09-30):** futures ES, NQ, YM, GC, SI and CL through the registered
+futures feed (Massive Futures Starter, ~10 min delayed). A root resolves to a specific contract from
+reference data (nearest non-expired contracts ranked by delayed session volume; explicit contract
+codes also resolve); sessions come from the provider trading schedule (holidays/early closes,
+de-duplicated), with the weekly Globex schedule only for dates the schedule does not cover; canonical
+5m..1d candles are built by Fume from 1-minute bars on the 17:00 CT session grid.
+
+**Provider-neutral futures conclusions (checkpoint research 2026-09-30):**
+
+- The five target roots are verified CME Group products on four DCMs: GC and SI (COMEX), CL
+  (NYMEX), NQ (CME), YM (CBOT). A futures feed therefore needs entitlements on all four.
+- The existing session model is sufficient: CME Globex trades Sunday 18:00 ET to Friday 17:00 ET
+  with a daily 17:00–18:00 ET break, and the trading day is the day the session ends, which
+  `MarketSession` windows and `sessionDate` already express. Holidays and early closes need a
+  schedule source (provider schedule API or CME calendar).
+- Neither CME nor the reviewed vendors publish exchange-official 1-minute bars; futures bars are
+  provider-computed from trades. Reconciliation therefore uses the provider's historical trades/bars.
+- A Fume futures `Instrument` is one specific contract; the root is resolved to a contract by the
+  backend (no hard-coded front month). First-notice dates were not found in the reviewed provider
+  fields, so a CME calendar source is needed for physically delivered contracts.
+- Tick size, tick value, multiplier and currency come from an authoritative metadata source
+  (provider reference data cross-checked with CME specifications), never hard-coded.
 
 **Equity-specific assumptions kept out of chart/core:**
 

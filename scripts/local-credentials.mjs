@@ -10,7 +10,9 @@ export function localCredentialValues(root) {
   if (!existsSync(path)) return [];
   const values = [];
   for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    const m = /^\s*(ALPACA_API_KEY_ID|ALPACA_API_SECRET_KEY)\s*=\s*(.*?)\s*$/.exec(line);
+    const m = /^\s*(ALPACA_API_KEY_ID|ALPACA_API_SECRET_KEY|MASSIVE_API_KEY)\s*=\s*(.*?)\s*$/.exec(
+      line,
+    );
     const value = m?.[2]?.replace(/^(['"])(.*)\1$/, '$2');
     if (value && value.length >= 8) values.push(value);
   }
