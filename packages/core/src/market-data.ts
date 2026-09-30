@@ -1,3 +1,4 @@
+import type { ProviderSymbolRef } from './instrument.ts';
 import type { EventTime, InstrumentId, ProviderId, UnixMs } from './primitives.ts';
 import type { StreamState } from './providers.ts';
 
@@ -25,8 +26,13 @@ export interface DataFeedInfo {
   feedId: string;
   /** false when the feed is a single venue (IEX) rather than consolidated (SIP). */
   consolidated: boolean;
-  /** Real-time vs delayed. */
+  /**
+   * Real-time (0) vs delayed. A delayed feed's newest data is about `delayMs` behind wall-clock
+   * time; UIs label it as delayed (never "live") and "latest" means the newest delayed data.
+   */
   delayMs: number;
+  /** Short neutral display name for the data source, e.g. "IEX", "CME futures". Display only. */
+  displayName?: string;
 }
 
 /**
@@ -115,16 +121,25 @@ export interface MarketSession {
   }[];
 }
 
-/** Channels a backend requests from a market-data provider (provider-neutral names). */
-export type MarketChannel = 'trades' | 'quotes' | 'minuteBars' | 'sessionBar' | 'status';
+/**
+ * Channels a backend requests from a market-data provider (provider-neutral names).
+ * `secondBars` are provider per-second aggregates (for feeds without individual trades).
+ */
+export type MarketChannel =
+  'trades' | 'quotes' | 'secondBars' | 'minuteBars' | 'sessionBar' | 'status';
 
 export interface MarketSubscription {
   instrumentId: InstrumentId;
   channels: readonly MarketChannel[];
+  /** The instrument's provider symbol, supplied by the backend so a stream adapter can subscribe. */
+  marketDataRef?: ProviderSymbolRef;
 }
 
-/** Interval of a provider-level bar event: one minute, or the whole trading session (daily). */
-export type BarInterval = '1m' | 'session';
+/**
+ * Interval of a provider-level bar event: one second (a provider's per-second aggregate), one
+ * minute, or the whole trading session (daily).
+ */
+export type BarInterval = '1s' | '1m' | 'session';
 
 /**
  * Normalized live market event. This union is both the provider-port output and the payload of
@@ -142,6 +157,8 @@ export type MarketEvent =
        * provisional: the current, still-forming bar (e.g. a provider's running session bar).
        * final: a completed bar published by the provider.
        * revised: a correction to a previously published final bar.
+       * A `1s` bar is a building block of its minute and never official by itself: consumers fold
+       * seconds into a provisional minute until the provider's `1m` bar finalizes that minute.
        */
       phase: 'provisional' | 'final' | 'revised';
       bar: Bar;

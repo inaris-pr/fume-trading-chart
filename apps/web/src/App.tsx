@@ -1,22 +1,31 @@
-import { useState } from 'react';
-import type { TimeframeId } from '@fume/core';
-import { isReplaySymbol, REPLAY_SYMBOLS, ReplayMarketDataProvider } from '@fume/replay';
-import { ChartHost, type ChartSource } from './ChartHost.tsx';
-import { FumeHttpClient } from './api/fume-client.ts';
+import { useEffect, useState } from 'react';
+import type { AssetClass, Instrument, StreamState, TimeframeId } from '@fume/core';
+import { FumeApiDataFeed, ReplayDataFeed, type ChartStatus, type DataFeed } from '@fume/datafeed';
+import { isReplaySymbol, REPLAY_SYMBOLS } from '@fume/replay';
+import { ChartHost } from './ChartHost.tsx';
 import { feedLabel, feedTitle } from './feed-label.ts';
-import type { HistoryStatus } from './history/historical-controller.ts';
+import { TwoChartProof } from './TwoChartProof.tsx';
+import { EQUITY_MENU, FUTURES_MENU, FUTURES_ROOTS, optionText } from './symbol-menu.ts';
 import { isTimeframe, TIMEFRAME_LABELS, TIMEFRAME_ORDER } from './timeframes.ts';
 
-/** Symbols offered in the selector (both sources). */
-const SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'NVDA', 'TSLA'] as const;
+/** Equities/ETFs offered with the API source (futures roots: symbol-menu.ts). */
+const SYMBOLS: readonly string[] = EQUITY_MENU.map((e) => e.symbol);
 const TICKER = /^[A-Z][A-Z0-9.]{0,9}$/;
 
 type SourceMode = 'replay' | 'api';
 
+interface Selection {
+  symbol: string;
+  assetClass: AssetClass;
+  timeframe: TimeframeId;
+}
+
 /**
  * Dev query parameters (QA links, not persistence):
  * `?source=api` loads canonical history from Fume's backend (default: deterministic replay);
- * `?symbol=` / `?tf=` set the initial selection; `?speed=` the replay speed.
+ * `?proof=two-charts` (with `?source=api`) shows the two-chart embedding proof (NQ 5m + ES 1h on
+ * one shared feed and stream connection);
+ * `?symbol=` / `?asset=future` / `?tf=` set the initial selection; `?speed=` the replay speed.
  */
 const params = () => new URLSearchParams(window.location.search);
 
@@ -24,15 +33,21 @@ function sourceMode(): SourceMode {
   return params().get('source') === 'api' ? 'api' : 'replay';
 }
 
+function isFuturesRoot(symbol: string | null): boolean {
+  return symbol !== null && FUTURES_ROOTS.includes(symbol);
+}
+
 function isSymbolFor(mode: SourceMode, symbol: string | null): symbol is string {
   return mode === 'replay' ? isReplaySymbol(symbol) : symbol !== null && TICKER.test(symbol);
 }
 
-function initialSelection(mode: SourceMode): { symbol: string; timeframe: TimeframeId } {
+function initialSelection(mode: SourceMode): Selection {
   const symbol = params().get('symbol');
   const timeframe = params().get('tf');
+  const future = mode === 'api' && params().get('asset') === 'future' && isFuturesRoot(symbol);
   return {
-    symbol: isSymbolFor(mode, symbol) ? symbol : 'SPY',
+    symbol: future || isSymbolFor(mode, symbol) ? symbol! : 'SPY',
+    assetClass: future ? 'future' : 'equity',
     timeframe: isTimeframe(timeframe) ? timeframe : '5m',
   };
 }
@@ -43,19 +58,67 @@ function replaySpeed(): number {
   return Number.isFinite(speed) && speed > 0 && speed <= 3600 ? speed : 20;
 }
 
-function createSource(mode: SourceMode): ChartSource {
-  return mode === 'api'
-    ? { kind: 'api', client: new FumeHttpClient() }
-    : { kind: 'replay', provider: new ReplayMarketDataProvider({ speed: replaySpeed() }) };
+/**
+ * Replay keeps its long-standing switching behavior: the previous candles stay visible until the
+ * new symbol/timeframe is ready (the API source clears at once and shows a loading status).
+ */
+const REPLAY_SESSION_SETTINGS = { clearOnSwitch: false } as const;
+
+/** One DataFeed per page, shared by every chart on it (one stream connection per hub). */
+function createFeed(mode: SourceMode): DataFeed {
+  return mode === 'api' ? new FumeApiDataFeed() : new ReplayDataFeed({ speed: replaySpeed() });
+}
+
+const optionValue = (assetClass: AssetClass, symbol: string) => `${assetClass}:${symbol}`;
+
+/** "NQZ6 · Dec 2026" chip text and tooltip for a specific futures contract. */
+function contractInfo(instrument: Instrument): { text: string; title: string } | null {
+  const f = instrument.future;
+  if (instrument.assetClass !== 'future' || !f) return null;
+  const month = instrument.description?.split(' · ').at(-1) ?? f.contractMonth;
+  const lastTrade = f.lastTradeTime
+    ? new Date(f.lastTradeTime).toLocaleDateString(undefined, {
+        timeZone: instrument.session.timezone,
+      })
+    : null;
+  return {
+    text: `${instrument.displaySymbol} · ${month}`,
+    title: [
+      instrument.description ?? instrument.displaySymbol,
+      `Contract ${instrument.displaySymbol}`,
+      lastTrade ? `last trade ${lastTrade}` : null,
+      `tick value ${f.tickValue} ${instrument.currency}`,
+      `multiplier ${instrument.contractMultiplier}`,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  };
 }
 
 export function App() {
   const [mode] = useState(sourceMode);
-  const [source] = useState(() => createSource(mode));
+  const [feed] = useState(() => createFeed(mode));
+  // Dev-only QA handle (stripped from production builds). Set in an effect: StrictMode may call
+  // the state initializer twice and keep only one of the feeds.
+  useEffect(() => {
+    if (import.meta.env.DEV) Object.assign(window, { __fumeFeed: feed });
+  }, [feed]);
   const [selection, setSelection] = useState(() => initialSelection(mode));
-  const [status, setStatus] = useState<HistoryStatus | null>(null);
+  const [status, setStatus] = useState<ChartStatus | null>(null);
+  const [stream, setStream] = useState<StreamState | null>(null);
+  if (mode === 'api' && params().get('proof') === 'two-charts') {
+    return <TwoChartProof datafeed={feed} />;
+  }
   const base: readonly string[] = mode === 'replay' ? REPLAY_SYMBOLS : SYMBOLS;
-  const symbolOptions = base.includes(selection.symbol) ? base : [...base, selection.symbol];
+  const equityOptions =
+    selection.assetClass === 'equity' && !base.includes(selection.symbol)
+      ? [...base, selection.symbol]
+      : base;
+  const ready = status?.kind === 'ready' ? status : null;
+  const shown =
+    status?.kind === 'ready' || status?.kind === 'empty' ? status.instrument : undefined;
+  const contract = shown ? contractInfo(shown) : null;
+  const streaming = ready?.streaming ?? false;
 
   return (
     <div className="app">
@@ -65,19 +128,46 @@ export function App() {
           <span className="visually-hidden">Symbol</span>
           <select
             aria-label="Symbol"
-            value={selection.symbol}
+            value={optionValue(selection.assetClass, selection.symbol)}
             onChange={(e) => {
-              const symbol = e.target.value;
-              if (isSymbolFor(mode, symbol)) setSelection((s) => ({ ...s, symbol }));
+              const [assetClass, symbol] = e.target.value.split(':') as [AssetClass, string];
+              if (assetClass === 'future' ? isFuturesRoot(symbol) : isSymbolFor(mode, symbol)) {
+                setStream(null);
+                setSelection((s) => ({ ...s, symbol, assetClass }));
+              }
             }}
           >
-            {symbolOptions.map((symbol) => (
-              <option key={symbol} value={symbol}>
-                {symbol}
-              </option>
-            ))}
+            {mode === 'api' ? (
+              <>
+                <optgroup label="Stocks & ETFs">
+                  {equityOptions.map((symbol) => (
+                    <option key={symbol} value={optionValue('equity', symbol)}>
+                      {optionText(symbol, EQUITY_MENU)}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Futures">
+                  {FUTURES_MENU.map(({ symbol }) => (
+                    <option key={symbol} value={optionValue('future', symbol)}>
+                      {optionText(symbol, FUTURES_MENU)}
+                    </option>
+                  ))}
+                </optgroup>
+              </>
+            ) : (
+              equityOptions.map((symbol) => (
+                <option key={symbol} value={optionValue('equity', symbol)}>
+                  {symbol}
+                </option>
+              ))
+            )}
           </select>
         </label>
+        {contract && (
+          <span className="contract" data-testid="contract" title={contract.title}>
+            {contract.text}
+          </span>
+        )}
         <div className="timeframes" role="group" aria-label="Timeframe">
           {TIMEFRAME_ORDER.map((timeframe) => (
             <button
@@ -90,38 +180,43 @@ export function App() {
             </button>
           ))}
         </div>
-        <span className="meta">RTH</span>
+        <span className="meta" title="Session shown on the chart">
+          {selection.assetClass === 'future' ? 'Full session' : 'RTH'}
+        </span>
         {mode === 'replay' ? (
           <span className="feed" title="Deterministic synthetic replay data. Not real market data.">
             Replay · not live
           </span>
         ) : (
           <span
-            className="feed"
+            className={`feed${streaming ? ' feed-streaming' : ''}${ready && ready.feed.delayMs > 0 && streaming ? ' feed-delayed' : ''}`}
             data-testid="feed-label"
             title={
-              status?.kind === 'ready'
-                ? feedTitle(status.feed)
-                : 'Historical candles from the Fume backend'
+              ready ? feedTitle(ready.feed, streaming, stream) : 'Candles from the Fume backend'
             }
           >
-            {status?.kind === 'ready' ? feedLabel(status.feed) : 'Historical'}
+            {ready ? feedLabel(ready.feed, streaming, stream) : 'Historical'}
           </span>
         )}
       </header>
       <main className="chart-area">
         <ChartHost
-          source={source}
+          datafeed={feed}
+          {...(mode === 'replay' ? { settings: REPLAY_SESSION_SETTINGS } : {})}
           symbol={selection.symbol}
+          assetClass={selection.assetClass}
           timeframe={selection.timeframe}
           onStatus={setStatus}
+          onStreamState={setStream}
         />
         {mode === 'api' && status && status.kind !== 'ready' && (
           <div className={`chart-status chart-status-${status.kind}`} role="status">
             {status.kind === 'loading' &&
               `Loading ${status.symbol} ${TIMEFRAME_LABELS[status.timeframe]}…`}
             {status.kind === 'empty' &&
-              `No ${TIMEFRAME_LABELS[status.timeframe]} history for ${status.symbol}`}
+              (status.streaming
+                ? `No delayed data yet for ${status.symbol}`
+                : `No ${TIMEFRAME_LABELS[status.timeframe]} history for ${status.symbol}`)}
             {status.kind === 'error' && `${status.symbol}: ${status.message} (${status.code})`}
           </div>
         )}

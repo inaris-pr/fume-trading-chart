@@ -71,6 +71,7 @@ describe('@fume/chart stays framework-independent and provider-neutral', () => {
       /\bNYSE\b|\bXNYS\b/,
       /['"]\$|`\$(?!\{)/,
       /alpaca/i,
+      /massive/i,
       /\bUSD\b/,
     ];
     for (const file of files) {
@@ -119,9 +120,10 @@ const code = (file: string) =>
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^:])\/\/.*$/gm, '$1');
 
-describe('core, chart, replay and web stay provider-neutral (Stages 2-4)', () => {
+describe('core, chart, replay and web stay provider-neutral (Stages 2-5)', () => {
   const providerSpecific = [
     /alpaca/i,
+    /massive/i,
     /\bAPCA\b/,
     /['"`](?:https?|wss?):\/\//,
     /wrangler/i,
@@ -141,19 +143,60 @@ describe('core, chart, replay and web stay provider-neutral (Stages 2-4)', () =>
     }
   });
 
-  test('web: never names a provider or host; the only network call is the relative /api/v1 client', () => {
-    const client = join(root, 'apps/web/src/api/fume-client.ts');
+  test('web: never names a provider or host and makes no network calls itself (the DataFeed does)', () => {
     for (const file of sourceFiles(join(root, 'apps/web/src'))) {
+      const source = code(file);
+      for (const pattern of [...providerSpecific, ...network])
+        expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+      for (const spec of importsOf(read(file))) expect(spec, file).not.toMatch(/worker/);
+    }
+  });
+
+  test('web consumes packages only through their public entry points', () => {
+    for (const file of sourceFiles(join(root, 'apps/web/src'))) {
+      for (const spec of importsOf(read(file))) {
+        if (spec.startsWith('.')) continue;
+        expect(spec, file).toMatch(
+          /^(@fume\/(core|chart|datafeed|replay)|react|react-dom(\/client)?)$/,
+        );
+      }
+    }
+  });
+
+  test('@fume/datafeed: provider-neutral; network only in its API client files, relative default base', () => {
+    const dir = join(root, 'packages/datafeed/src');
+    const http = join(dir, 'api', 'http-client.ts');
+    const stream = join(dir, 'api', 'stream-connection.ts');
+    for (const file of sourceFiles(dir)) {
       const source = code(file);
       for (const pattern of providerSpecific)
         expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
       for (const pattern of network) {
-        if (file === client && pattern.source.includes('fetch')) continue;
+        if (file === http && pattern.source.includes('fetch')) continue;
+        if (file === stream && pattern.source.includes('WebSocket')) continue;
         expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
       }
-      for (const spec of importsOf(read(file))) expect(spec, file).not.toMatch(/worker/);
+      for (const spec of importsOf(read(file))) {
+        expect(spec, file).toMatch(/^(\.\.?\/|@fume\/(core|chart|replay)$)/);
+      }
+      // The chart engine is used for types only (the host owns the FumeChart instance).
+      for (const m of read(file).matchAll(
+        /import\s+(type\s+)?[^;]*?from\s+['"]@fume\/chart['"]/g,
+      )) {
+        expect(m[1], `${file}: ${m[0]}`).toBe('type ');
+      }
     }
-    expect(code(client)).toMatch(/API_BASE = '\/api\/v1'/);
+    expect(code(http)).toMatch(/API_BASE = '\/api\/v1'/);
+    // Stream URLs are built from the configured base on the page origin (no host compiled in).
+    expect(code(stream)).toMatch(/location\.href/);
+  });
+
+  test('core, chart and replay never import @fume/datafeed (dependency direction)', () => {
+    for (const dir of ['packages/core/src', 'packages/chart/src', 'packages/replay/src']) {
+      for (const file of sourceFiles(join(root, dir))) {
+        for (const spec of importsOf(read(file))) expect(spec, file).not.toMatch(/@fume\/datafeed/);
+      }
+    }
   });
 
   test('ticker and timeframe logic lives in the app shell, not in the chart engine', () => {
@@ -165,9 +208,12 @@ describe('core, chart, replay and web stay provider-neutral (Stages 2-4)', () =>
   });
 });
 
-describe('Stage 4 Worker boundaries', () => {
+describe('Worker boundaries (Stages 4-5)', () => {
   const workerSrc = join(root, 'apps/worker/src');
-  const alpacaDir = join(workerSrc, 'providers', 'alpaca');
+  const providersDir = join(workerSrc, 'providers');
+  const alpacaDir = join(providersDir, 'alpaca');
+  const massiveDir = join(providersDir, 'massive');
+  const hubDir = join(workerSrc, 'hub');
   const compositionRoot = join(workerSrc, 'index.ts');
   const files = sourceFiles(workerSrc);
 
@@ -184,24 +230,50 @@ describe('Stage 4 Worker boundaries', () => {
     expect(Object.keys(pkg.devDependencies ?? {})).toEqual(['wrangler']);
   });
 
-  test('Alpaca specifics live only in providers/alpaca (plus the composition root that wires it)', () => {
+  test('provider specifics live only in their providers/<name> directory (plus the composition root)', () => {
+    const rules: [string, RegExp[]][] = [
+      [alpacaDir, [/alpaca/i, /\bAPCA\b/i, /next_page_token|page_token/]],
+      [massiveDir, [/massive/i, /next_url/, /\bev\s*===?\s*['"]AM?['"]/]],
+    ];
     for (const file of files) {
-      if (file.startsWith(alpacaDir) || file === compositionRoot) continue;
+      if (file === compositionRoot) continue;
       const source = code(file);
-      for (const pattern of [
-        /alpaca/i,
-        /\bAPCA\b/i,
-        /['"`]https?:\/\//,
-        /next_page_token|page_token/,
-      ])
-        expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+      for (const [dir, patterns] of rules) {
+        if (file.startsWith(dir)) continue;
+        for (const pattern of patterns)
+          expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+      }
+      // Hosts and URLs only inside provider adapters.
+      if (!file.startsWith(providersDir)) {
+        expect(source, `${file} names a URL`).not.toMatch(/['"`](?:https?|wss?):\/\//);
+      }
     }
+  });
+
+  test('the Worker entry module exports only the fetch handler and Durable Object classes', () => {
+    // workerd rejects any other export (e.g. a constant) at startup.
+    const exports = read(compositionRoot)
+      .split('\n')
+      .filter((l) => /^export\b/.test(l));
+    expect(exports.length).toBeGreaterThan(0);
+    for (const line of exports) expect(line).toMatch(/^export (default \{|class \w+ extends \w+)/);
   });
 
   test('only the composition root imports provider adapters', () => {
     for (const file of files) {
-      if (file === compositionRoot || file.startsWith(alpacaDir)) continue;
+      if (file === compositionRoot || file.startsWith(providersDir)) continue;
       for (const spec of importsOf(read(file))) expect(spec, file).not.toMatch(/providers\//);
+    }
+  });
+
+  test('providers never import each other, the router, the registry or the hub (upstream socket types only)', () => {
+    for (const file of files) {
+      if (!file.startsWith(providersDir)) continue;
+      const other = file.startsWith(alpacaDir) ? /massive/ : /alpaca/;
+      for (const spec of importsOf(read(file))) {
+        expect(spec, file).not.toMatch(other);
+        expect(spec, file).not.toMatch(/router|registry|durable-object|feed-hub|protocol/);
+      }
     }
   });
 
@@ -210,6 +282,7 @@ describe('Stage 4 Worker boundaries', () => {
       'packages/core/src',
       'packages/chart/src',
       'packages/replay/src',
+      'packages/datafeed/src',
       'apps/web/src',
     ]) {
       for (const file of sourceFiles(join(root, dir))) {
@@ -219,12 +292,22 @@ describe('Stage 4 Worker boundaries', () => {
     }
   });
 
-  test('Stage 4 scope: no WebSocket, Durable Object, storage or trading code in the Worker', () => {
+  test('Stage 5 scope: WebSocket/Durable Object code only in hub/, stream adapters and the root; no storage services or trading code', () => {
+    const streamAdapters = [join(massiveDir, 'stream.ts')];
+    // The router only validates the upgrade request and forwards it to the hub.
+    const router = join(workerSrc, 'router.ts');
     for (const file of files) {
       const source = code(file);
+      const allowed =
+        file.startsWith(hubDir) ||
+        streamAdapters.includes(file) ||
+        file === compositionRoot ||
+        file === router;
+      if (!allowed) {
+        for (const pattern of [/WebSocket/, /DurableObject/])
+          expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+      }
       for (const pattern of [
-        /WebSocket/,
-        /DurableObject/,
         /\bKVNamespace\b|\bD1Database\b|\bR2Bucket\b/,
         /\/v2\/orders|\/v2\/positions|\/v2\/account|submitOrder|cancelOrder/,
       ])
@@ -232,16 +315,21 @@ describe('Stage 4 Worker boundaries', () => {
     }
   });
 
-  test('wrangler.jsonc: local only, no secrets, no bindings for storage or Durable Objects', () => {
+  test('wrangler.jsonc: local only, no secrets, only the feed-hub Durable Object binding', () => {
     const config = read(join(root, 'apps/worker/wrangler.jsonc'));
     expect(config).toMatch(/"workers_dev":\s*false/);
     expect(config).toMatch(/"preview_urls":\s*false/);
-    expect(config).not.toMatch(/ALPACA_API_KEY_ID"\s*:|ALPACA_API_SECRET_KEY"\s*:/);
     expect(config).not.toMatch(
-      /durable_objects|kv_namespaces|d1_databases|r2_buckets|"routes"|"route"/,
+      /ALPACA_API_KEY_ID"\s*:|ALPACA_API_SECRET_KEY"\s*:|MASSIVE_API_KEY"\s*:/,
     );
+    expect(config).not.toMatch(/kv_namespaces|d1_databases|r2_buckets|"routes"|"route"/);
+    expect(config).toMatch(/"name":\s*"FEED_HUB",\s*"class_name":\s*"FeedHubObject"/);
+    expect(config).toMatch(/"new_sqlite_classes":\s*\["FeedHubObject"\]/);
     expect(config).toMatch(/"ALPACA_DATA_FEED":\s*"iex"/);
     expect(config).toMatch(/"ALPACA_TRADING_BASE_URL":\s*"https:\/\/paper-api\.alpaca\.markets"/);
+    expect(config).toMatch(
+      /"MASSIVE_FUTURES_STREAM_URL":\s*"wss:\/\/delayed\.massive\.com\/futures"/,
+    );
   });
 
   test('.dev.vars is gitignored and its example holds empty values only', () => {
@@ -260,7 +348,9 @@ describe('Stage 4 Worker boundaries', () => {
       .map((d) => join(d.parentPath, d.name));
     for (const file of fixtureFiles) {
       const text = read(file);
-      expect(text, file).not.toMatch(/APCA-API|apca-api|Authorization|secret|key_id|keyId/i);
+      expect(text, file).not.toMatch(
+        /APCA-API|apca-api|Authorization|Bearer|secret|key_id|keyId|apiKey|"action"\s*:\s*"auth"/i,
+      );
       expect(text, file).not.toMatch(/\bPK[A-Z0-9]{16,}\b|\bAK[A-Z0-9]{16,}\b/);
       expect(text, file).not.toMatch(/account_number|account_id/);
     }

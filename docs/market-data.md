@@ -113,6 +113,27 @@ Implemented and tested with the deterministic replay provider (`@fume/replay`); 
 - **Observed IEX history gap:** Alpaca IEX returned **no bars at all** for 2025-03-10 (SPY and TSLA; the SIP feed has data, and the calendar lists a normal session). Fume shows an empty session; nothing is fabricated.
 - **Not observed yet:** an in-progress bucket with real data (all QA ran after the close). The status rule is covered by tests.
 
+## Aggregate-driven feeds (Stage 5, delayed futures)
+
+Some feeds deliver provider aggregates instead of trades (Massive Futures Starter: per-second and
+per-minute aggregates, ~10 minutes delayed). They are NOT forced through trade-level aggregation:
+
+1. **History:** provider 1-minute aggregates -> canonical Fume 1m history (the only provider
+   interval used); Fume builds 5m / 15m / 1h / 4h / 1d itself on the session grid (futures:
+   17:00 CT session start; the provider's UTC-aligned hour bars are never used).
+2. **Current candle:** `bar` events with `interval: '1s'` fold into a provisional minute in
+   `LiveCandleAggregator` (open = first second's open, close = last second's close, high/low
+   extremes, volume sum; a re-delivered second replaces the stored one; missing seconds are never
+   fabricated).
+3. **Finalization:** the provider's `1m` bar (stream or REST) is authoritative and replaces the
+   second-built minute; later seconds for that minute are ignored.
+4. **Higher timeframes:** every changed minute re-folds its bucket in the displayed timeframe.
+5. **Recovery:** after an upstream reconnect the hub sends REST 1-minute bars for a 30-minute
+   overlap; after a client reconnect/sequence gap/hub restart the client re-fetches the tail and
+   rebuilds the live state.
+6. **Delay:** candle status and "latest" use delayed time (`now - delayMs`); no empty candles are
+   created up to wall-clock time.
+
 ## Timestamps and ordering
 
 - Every event carries `EventTime { ns, ms }` (see [domain-model.md](domain-model.md#timestamps)).

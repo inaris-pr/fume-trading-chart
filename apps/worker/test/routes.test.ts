@@ -93,6 +93,23 @@ describe('health', () => {
       tradingEnvironment: 'paper',
       marketDataFeed: 'iex',
       marketDataConfigured: true,
+      feeds: [
+        {
+          assetClasses: ['equity', 'etf'],
+          feedId: 'iex',
+          delayMs: 0,
+          configured: true,
+          streaming: false,
+        },
+        // No futures key in this environment: registered but not configured.
+        {
+          assetClasses: ['future'],
+          feedId: 'futures-delayed',
+          delayMs: 600_000,
+          configured: false,
+          streaming: false,
+        },
+      ],
     });
     expect(fake.requests).toHaveLength(0);
   });

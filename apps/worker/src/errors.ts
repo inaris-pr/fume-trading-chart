@@ -4,7 +4,7 @@
  * (the core ProviderError shape); the router maps it to an ApiError here, so no raw upstream
  * payload, status text, header or stack trace ever reaches a client.
  */
-import type { ProviderError } from '@fume/core';
+import type { ProviderError, ProviderErrorReason } from '@fume/core';
 
 export type ApiErrorCode =
   | 'unauthorized'
@@ -52,6 +52,8 @@ export class ProviderFailure extends Error implements ProviderError {
   readonly retryAfterMs?: number;
   /** Raw provider code for logs only. */
   readonly providerCode?: string;
+  /** Provider-neutral detail, surfaced to clients as `details.reason`. */
+  readonly reason?: ProviderErrorReason;
 
   constructor(error: ProviderError) {
     super(error.message);
@@ -60,11 +62,42 @@ export class ProviderFailure extends Error implements ProviderError {
     this.retryable = error.retryable;
     if (error.retryAfterMs !== undefined) this.retryAfterMs = error.retryAfterMs;
     if (error.providerCode !== undefined) this.providerCode = error.providerCode;
+    if (error.reason !== undefined) this.reason = error.reason;
   }
+}
+
+/** Client-facing messages for provider-neutral reasons (never upstream text). */
+const REASON_MESSAGES: Readonly<Record<ProviderErrorReason, string>> = {
+  contract_not_found: 'No such futures contract',
+  contract_expired: 'That futures contract has expired',
+  auth_failed: 'The market-data provider rejected the backend credentials',
+  entitlement: 'The market-data subscription does not include this data',
+  connection_conflict: 'The market-data feed connection is in use by another process',
+  upstream_disconnected: 'The market-data feed is disconnected',
+  history_unavailable: 'Market-data history is temporarily unavailable',
+  schedule_unavailable: 'The trading schedule is temporarily unavailable',
+  no_delayed_data_yet: 'No delayed market data is available yet',
+};
+
+export function reasonMessage(reason: ProviderErrorReason): string {
+  return REASON_MESSAGES[reason];
 }
 
 /** Maps a provider failure to the client-facing error. Messages are Fume's own, never upstream text. */
 export function fromProviderFailure(failure: ProviderFailure): ApiError {
+  const base = mapProviderCode(failure);
+  if (!failure.reason) return base;
+  return new ApiError(
+    base.status,
+    base.code,
+    reasonMessage(failure.reason),
+    base.retryable,
+    { ...base.details, reason: failure.reason },
+    base.retryAfterMs,
+  );
+}
+
+function mapProviderCode(failure: ProviderFailure): ApiError {
   switch (failure.code) {
     case 'invalid_request':
       return new ApiError(400, 'invalid_request', 'The market-data provider rejected the request');

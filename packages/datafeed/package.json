@@ -1,0 +1,20 @@
+{
+  "name": "@fume/datafeed",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Fume headless chart session and data feeds (Fume API backend, deterministic replay). Framework-free.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fume/core": "workspace:*",
+    "@fume/replay": "workspace:*"
+  },
+  "devDependencies": {
+    "@fume/chart": "workspace:*"
+  }
+}

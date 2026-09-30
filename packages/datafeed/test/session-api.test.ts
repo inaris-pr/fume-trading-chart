@@ -1,5 +1,5 @@
 /**
- * HistoricalChartController against a fake Fume backend (no network, no provider). The fake builds
+ * ChartSession against a fake Fume backend DataFeed (no network, no provider). The fake builds
  * canonical candles with @fume/core exactly like the Worker does, from synthetic minutes.
  */
 import { describe, expect, test } from 'vitest';
@@ -17,16 +17,12 @@ import {
 import { generateSyntheticBars } from '@fume/core/fixtures';
 import { FumeChart, type ChartData, type PrependOptions } from '@fume/chart';
 import { FakeEnvironment, fakeContainer, pointer } from '../../../packages/chart/test/fakes.ts';
-import { FumeApiError, type BarsPage, type BarsQuery } from '../src/api/fume-client.ts';
-import {
-  HistoricalChartController,
-  HISTORY_PAGE,
-  type HistoryClient,
-  type HistoryStatus,
-} from '../src/history/historical-controller.ts';
-import type { ChartSink } from '../src/live/chart-controller.ts';
-import { feedLabel } from '../src/feed-label.ts';
-import { TIMEFRAME_ORDER } from '../src/timeframes.ts';
+import { FumeApiError } from '../src/api/http-client.ts';
+import { HISTORY_PAGE } from '../src/defaults.ts';
+import type { BarsPage, BarsQuery, ChartSink, DataFeed } from '../src/types.ts';
+import { ChartSession, type ChartStatus } from '../src/session.ts';
+
+const TIMEFRAME_ORDER: readonly TimeframeId[] = ['1d', '4h', '1h', '15m', '5m', '1m'];
 
 const MIN = 60_000;
 const DAY = 86_400_000;
@@ -67,7 +63,7 @@ const CALENDAR = resolveWeeklySessions({
 const DATA_SESSIONS = CALENDAR.filter((s) => s.windows[0]!.end <= NOW);
 
 /** Fake backend: canonical candles via @fume/core; optional gates to control response timing. */
-class FakeBackend implements HistoryClient {
+class FakeBackend implements DataFeed {
   readonly barsCalls: BarsQuery[] = [];
   readonly sessionCalls: [UnixMs, UnixMs][] = [];
   readonly signals: AbortSignal[] = [];
@@ -109,10 +105,16 @@ class FakeBackend implements HistoryClient {
     }
   }
 
-  async resolveInstrument(symbol: string, signal?: AbortSignal) {
-    await this.wait(signal);
-    return instrument(symbol);
+  async resolveInstrument(symbol: string, options: { signal?: AbortSignal } = {}) {
+    await this.wait(options.signal);
+    return { instrument: instrument(symbol), live: false };
   }
+
+  subscribe() {
+    return null; // history only
+  }
+
+  dispose() {}
 
   async getSessions(
     _id: InstrumentId,
@@ -177,9 +179,9 @@ class RecordingChart implements ChartSink {
 function setup() {
   const backend = new FakeBackend();
   const chart = new RecordingChart();
-  const statuses: HistoryStatus[] = [];
-  const controller = new HistoricalChartController({
-    client: backend,
+  const statuses: ChartStatus[] = [];
+  const controller = new ChartSession({
+    datafeed: backend,
     chart,
     onStatus: (s) => statuses.push(s),
   });
@@ -199,7 +201,7 @@ const nyHHMM = (t: number) =>
     hourCycle: 'h23',
   }).format(t);
 
-describe('HistoricalChartController', () => {
+describe('ChartSession (backend DataFeed, history)', () => {
   test('loads SPY: clears first, then canonical bars with a mapping that covers them and future sessions', async () => {
     const { chart, statuses, controller, backend } = setup();
     await controller.select('SPY', '1h');
@@ -216,8 +218,9 @@ describe('HistoricalChartController', () => {
     });
     expect(backend.barsCalls[0]!.end).toBeUndefined();
     expect(statuses.map((s) => s.kind)).toEqual(['loading', 'ready']);
-    const ready = statuses[1] as Extract<HistoryStatus, { kind: 'ready' }>;
-    expect(feedLabel(ready.feed)).toBe('Alpaca · IEX · historical');
+    const ready = statuses[1] as Extract<ChartStatus, { kind: 'ready' }>;
+    expect(ready.feed).toEqual(FEED);
+    expect(ready.streaming).toBe(false);
     expect(data.bars.slice(-7).map((b) => nyHHMM(b.start))).toEqual([
       '09:30',
       '10:30',
@@ -402,7 +405,7 @@ describe('real FumeChart integration: older history prepends without a visual ju
     };
     const backend = new FakeBackend();
     const requests: number[] = [];
-    const controller = new HistoricalChartController({ client: backend, chart: sink });
+    const controller = new ChartSession({ datafeed: backend, chart: sink });
     chart.setOptions({
       onNeedsOlderData: (r) => void (requests.push(r.before), controller.requestOlderData(r)),
     });

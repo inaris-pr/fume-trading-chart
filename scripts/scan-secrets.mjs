@@ -26,7 +26,8 @@ const rules = [
   },
   {
     name: 'assigned Massive credential variable',
-    pattern: /MASSIVE_API_KEY\s*[=:]\s*['"]?[A-Za-z0-9_-]{8,}/,
+    // A literal value (like the Alpaca rule: identifiers such as TEST_MASSIVE_KEY do not match).
+    pattern: /MASSIVE_API_KEY\s*[=:]\s*['"]?[A-Za-z0-9]{12,}/,
   },
   {
     name: 'credential header with a literal value',

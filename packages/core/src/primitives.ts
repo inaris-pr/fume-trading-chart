@@ -62,4 +62,18 @@ export interface ProviderError {
   retryAfterMs?: number;
   /** Raw provider code for logs only; never branch on it outside the adapter. */
   providerCode?: string;
+  /** Provider-neutral detail a UI or API may act on (never raw provider text). */
+  reason?: ProviderErrorReason;
 }
+
+/** Provider-neutral failure details surfaced to clients (API `details.reason`, stream status). */
+export type ProviderErrorReason =
+  | 'contract_not_found'
+  | 'contract_expired'
+  | 'auth_failed'
+  | 'entitlement'
+  | 'connection_conflict'
+  | 'upstream_disconnected'
+  | 'history_unavailable'
+  | 'schedule_unavailable'
+  | 'no_delayed_data_yet';

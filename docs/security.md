@@ -2,6 +2,12 @@
 
 ## Credentials
 
+**Stage 5:** `MASSIVE_API_KEY` (delayed futures) follows the same rules as the Alpaca keys: only in
+the gitignored `apps/worker/.dev.vars` locally (a Worker secret later); sent only in the
+`Authorization: Bearer` header (REST) and the upstream WebSocket auth frame from the Worker/Durable
+Object; never in a URL (cursor `apiKey` parameters are stripped), log, error, fixture, API response
+or browser bundle. `scan:secrets` and `scan:bundle` compare its value too.
+
 - The Alpaca **paper** key ID and secret exist in only two places:
   1. **Local:** `apps/worker/.dev.vars`, created by you from `apps/worker/.dev.vars.example` (empty values only). The file is gitignored and read by `wrangler dev` and by the S1 script (`pnpm s1`), which never prints, logs or saves the values.
   2. **Cloudflare:** Worker secrets, set with `pnpm exec wrangler secret put ALPACA_API_KEY_ID` and `… ALPACA_API_SECRET_KEY` from `apps/worker/`. You type the values into the Wrangler prompt yourself. They never go into chat, files or shell history.

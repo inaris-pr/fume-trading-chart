@@ -36,11 +36,29 @@ Implemented in `apps/worker` and served by `wrangler dev` on 127.0.0.1:8787 (the
 - **Candle status:** `final` only if the bucket has ended at `serverTime` and all base bars in it are final; otherwise `provisional`. Nothing is fabricated for missing or future minutes.
 - **`/health`:** `{ ok, version, tradingEnvironment: "paper", marketDataFeed, marketDataConfigured }`. No upstream call, no key material.
 
+## Stage 5 additions (implemented 2026-09-30, local only)
+
+- **Routing by asset class / id namespace / provider** (ARCHITECTURE §6.1). Instrument ids:
+  `eq:<TICKER>` (US equities/ETFs) and `fut:<ROOT>:<YYYY-MM>` (one specific futures contract).
+- **`/instruments/resolve?symbol=NQ&assetClass=future`**: a futures root resolves to the
+  recommended specific contract; a contract code (`NQH7`) resolves to that contract. `assetClass`
+  is `equity` (default) or `future`. The response adds `stream: { key } | null` (opaque hub key;
+  null = history only).
+- **Error details:** provider-neutral `details.reason` where useful: `contract_not_found`,
+  `contract_expired`, `auth_failed`, `entitlement`, `history_unavailable`, `schedule_unavailable`
+  (plus `connection_conflict`, `upstream_disconnected` in stream status).
+- **Delayed feeds:** `meta.feed.delayMs` (futures: 600000) and `meta.feed.displayName`. Candle
+  status is judged in delayed time (`serverTime - delayMs`): a bucket that ended by the wall clock
+  but not by the delayed data stays `provisional`. "Latest" = newest delayed data.
+- **`/health`** adds `feeds: [{ assetClasses, feedId, delayMs, configured, streaming }]`.
+- **`/api/v1/stream?key=`**: WebSocket upgrade (after origin + authentication) forwarded to the
+  hub for that key; `426` without an upgrade, `404` unknown key, `503` when not configured.
+
 ## Market data
 
 ### `GET /api/v1/instruments/resolve?symbol=SPY`
 
-`200 → { "instrument": Instrument }` or `404`.
+`200 → { "instrument": Instrument, "stream": { "key": string } | null }` or `404`.
 
 ### `GET /api/v1/bars?instrumentId=eq:SPY&timeframe=1h&session=regular&end=<UnixMs>&limit=500`
 

@@ -4,8 +4,29 @@
 
 **Current stage: Stage 5 — Real-time + preview deploy**
 
-Status: **S2 COMPLETE · S3 COMPLETE · Owner DO decision: GO — Durable Object hub primitive approved ·
-permanent streaming NOT IMPLEMENTED**
+Status: **S2 COMPLETE · S3 COMPLETE · DO hub GO · PERMANENT DELAYED-FUTURES STREAMING IMPLEMENTED
+(uncommitted, local only), AWAITING OWNER REVIEW**
+
+**Implementation (2026-09-30, owner instruction "proceed with building the platform"; licensing is
+handled separately before public launch and does not shape the architecture):**
+
+- Provider-neutral routing: `apps/worker/src/registry.ts` (equities/ETFs -> Alpaca IEX, futures ->
+  Massive Futures Starter), futures ids `fut:<ROOT>:<YYYY-MM>`, `/instruments/resolve?assetClass=future`.
+- Massive REST adapter (`providers/massive/`): root -> recommended contract from reference data +
+  delayed snapshot volume, explicit contract codes, 1-minute bars (cursor paging), schedules ->
+  sessions (de-duplicated; weekly Globex fallback outside coverage).
+- Massive delayed stream adapter (`A.`/`AM.` aggregates, numeric strings normalized, bounded
+  reconnect, `max_connections`/1008 -> `connection_conflict` hold) behind the core
+  `StreamingMarketDataProvider` port.
+- Feed-scoped Durable Object hub (`src/hub/`, `FeedHubObject`, one instance per stream key):
+  subscription union, fan-out, 60 s idle grace, REST reconciliation after reconnect, persisted
+  conflict hold, hibernatable sockets + attachments for reconstruction; `/api/v1/stream?key=`.
+- Core: `1s` bar events folded into the provisional minute; the provider minute is authoritative.
+- Web: futures roots in the selector (ES NQ YM GC SI CL, with friendly labels; DIA added to
+  Stocks & ETFs), contract chip (e.g. `NQZ6 · Dec 2026`),
+  "CME futures · Delayed ~10m" label from feed metadata, stream client + live handoff/resync.
+- Validated locally against the real delayed feed (wrangler dev, Durable Object local; nothing
+  deployed). Alpaca equities unchanged and history-only.
 
 **CURRENT PROVIDER DIRECTION (owner, 2026-09-30):**
 
@@ -167,34 +188,23 @@ pnpm scan:bundle    # after pnpm build
 
 ## Exact next action
 
-**NEXT ACTION (owner): obtain written Massive licensing confirmation for the private Cloudflare
-backend architecture.** Claude does not contact Massive.
+**STOP: owner review of the uncommitted work** (not committed or pushed):
 
-Confirm that an individual Futures Starter subscriber may use: Massive → private Cloudflare Durable
-Object → private Fume client → the same individual subscriber only, with no customers, no third
-parties, no redistribution, no resale, no commercial service and no public API (and whether the
-backend counts toward the two-device limit). A draft support message was provided in the spike
-report.
+1. Stage 5 delayed futures (ES, NQ, YM, GC, SI, CL) + DIA and selector labels (reviewed earlier).
+2. Milestone **headless session + DataFeed extraction** (docs/embedding.md): new
+   `@fume/datafeed` (`ChartSession`, `DataFeed`, `FumeApiDataFeed` with configurable base URL,
+   auth hook and WebSocket factory, one multiplexed stream connection per hub, `ReplayDataFeed`);
+   `apps/web` uses only package entry points; two-chart proof at
+   `?source=api&proof=two-charts` (NQ 5m + ES 1h on one stream connection). Replay behavior is
+   unchanged (whole-session pages, no clearing on switch); the one intentional change is the 30 s
+   idle close of the shared stream socket (docs/embedding.md).
 
-**If Massive confirms (in writing):** the next checkpoint is a **small Cloudflare Massive integration
-spike** (isolated, non-production, like S3) validating:
+Local run: `pnpm dev:api` (Worker + Durable Object hub, needs the keys in
+`apps/worker/.dev.vars`), then `http://localhost:5173/?source=api&symbol=NQ&asset=future&tf=5m`.
+Only one process may hold the Massive connection.
 
-- one centralized Massive upstream connection
-- Durable Object lifecycle
-- delayed aggregate delivery
-- reconnect
-- REST reconciliation
-- `max_connections` / 1008 behavior
-- multiple Fume clients sharing the same upstream
-
-Then **STOP** again before permanent implementation.
-
-**If Massive does not confirm:** do not deploy Massive server-side. Reassess another permitted
-Massive architecture, or the Databento fallback (research.md).
-
-Until then, do NOT: deploy Massive data to Cloudflare, upgrade Massive or buy Massive Stocks, remove
-or replace Alpaca, modify the Stage 4 Alpaca implementation or chart code, implement permanent
-Massive futures support or permanent Stage 5 streaming, push, open a PR, or begin Stage 6.
+Not started (per the approved plan): `@fume/react`, theming, overlay/drawings/indicators, packaging
+(compiled builds), cross-origin backend auth, trading-platform integration.
 
 ## Recovery instructions
 

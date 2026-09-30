@@ -1,28 +1,34 @@
 /**
- * /api/v1 router. Provider-neutral: it sees only the core HistoricalMarketDataProvider port.
+ * /api/v1 router. Provider-neutral: it sees only the MarketDataRegistry (core provider ports plus
+ * routing metadata) and an optional stream-hub forwarder.
  *
  * Every request passes, in order: (1) origin policy, (2) authentication, (3) method + route,
  * (4) parameter validation, (5) the handler. Every error, including 404 and 405, uses the Fume
- * envelope (errors.ts). Responses are JSON with `Cache-Control: no-store`.
+ * envelope (errors.ts). Responses are JSON with `Cache-Control: no-store`, except a successful
+ * WebSocket upgrade on /api/v1/stream, which is the stream hub's own 101 response.
  */
-import type { BarSeriesMeta, HistoricalMarketDataProvider, UnixMs } from '@fume/core';
+import type { BarSeriesMeta, HistoricalMarketDataProvider, Instrument, UnixMs } from '@fume/core';
 import { authenticate } from './auth.ts';
 import { loadCanonicalPage } from './canonical-history.ts';
 import { checkOrigin, corsHeaders, preflightResponse } from './cors.ts';
-import { ApiError, errorBody, retryAfterSeconds, toApiError } from './errors.ts';
+import { ApiError, errorBody, reasonMessage, retryAfterSeconds, toApiError } from './errors.ts';
+import type { MarketDataRegistry, RegisteredFeed } from './registry.ts';
 import {
+  parseAssetClass,
   parseInstrumentId,
   parseLimit,
   parseOptionalEnd,
   parseRange,
   parseSessionMode,
+  parseStreamKey,
   parseSymbol,
   parseTimeframe,
 } from './validate.ts';
 
-export const FUME_VERSION = '0.4.0-dev';
+export const FUME_VERSION = '0.5.0-dev';
 /** Retry-After sent with a 429 when the provider did not supply one. */
 const DEFAULT_RETRY_AFTER_MS = 60_000;
+const STREAM_PATH = '/api/v1/stream';
 
 export interface RequestLog {
   route: string;
@@ -37,13 +43,16 @@ export interface RequestLog {
   truncated?: boolean;
 }
 
+/** Forwards an authenticated, validated WebSocket upgrade to the hub serving `key`. */
+export type StreamForwarder = (key: string, request: Request) => Promise<Response>;
+
 export interface RouterDeps {
   fumeEnv: string | undefined;
   allowedOrigins: ReadonlySet<string>;
-  /** Null when the market-data provider is not configured (missing credentials etc.). */
-  provider: HistoricalMarketDataProvider | null;
-  historyFloor: UnixMs;
+  registry: MarketDataRegistry;
   now: () => UnixMs;
+  /** Null/absent when no stream hub is bound (history only). */
+  stream?: StreamForwarder | null;
   /** Upstream calls made while handling this request (diagnostics only). */
   providerCalls?: () => number;
   /** Structured diagnostics only; never headers, credentials or config. */
@@ -66,7 +75,8 @@ const ROUTES: Readonly<Record<string, Handler>> = {
 export async function handleRequest(request: Request, deps: RouterDeps): Promise<Response> {
   const started = deps.now();
   const url = new URL(request.url);
-  const route = ROUTES[url.pathname] ? url.pathname : 'unmatched';
+  const isStream = url.pathname === STREAM_PATH;
+  const route = ROUTES[url.pathname] || isStream ? url.pathname : 'unmatched';
   let origin: string | null = null;
   let logExtra: Partial<RequestLog> = {};
   let response: Response;
@@ -76,14 +86,18 @@ export async function handleRequest(request: Request, deps: RouterDeps): Promise
       response = preflightResponse(origin);
     } else {
       authenticate(request, deps.fumeEnv);
-      const handler = ROUTES[url.pathname];
-      if (!handler) throw new ApiError(404, 'not_found', 'No such route');
-      if (request.method !== 'GET') {
-        throw new ApiError(405, 'invalid_request', 'Method not allowed');
+      if (isStream) {
+        response = await forwardStream(url, deps, request);
+      } else {
+        const handler = ROUTES[url.pathname];
+        if (!handler) throw new ApiError(404, 'not_found', 'No such route');
+        if (request.method !== 'GET') {
+          throw new ApiError(405, 'invalid_request', 'Method not allowed');
+        }
+        const result = await handler(url, deps, request);
+        logExtra = result.log ?? {};
+        response = json(200, result.body, origin);
       }
-      const result = await handler(url, deps, request);
-      logExtra = result.log ?? {};
-      response = json(200, result.body, origin);
     }
   } catch (error) {
     const apiError = toApiError(error);
@@ -130,11 +144,11 @@ function json(
   });
 }
 
-function requireProvider(deps: RouterDeps): HistoricalMarketDataProvider {
-  if (!deps.provider) {
+function requireProvider(feed: RegisteredFeed | null): HistoricalMarketDataProvider {
+  if (!feed?.provider) {
     throw new ApiError(503, 'unavailable', 'Market data is not configured on this backend');
   }
-  return deps.provider;
+  return feed.provider;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -142,37 +156,72 @@ function requireProvider(deps: RouterDeps): HistoricalMarketDataProvider {
 
 /** Non-sensitive status only. Makes no upstream request. */
 async function health(_url: URL, deps: RouterDeps) {
+  const equity = deps.registry.forAssetClass('equity');
   return {
     body: {
       ok: true,
       version: FUME_VERSION,
       tradingEnvironment: 'paper',
-      marketDataFeed: deps.provider?.feed.feedId ?? null,
-      marketDataConfigured: deps.provider !== null,
+      marketDataFeed: equity?.provider ? equity.feed.feedId : null,
+      marketDataConfigured: equity?.provider != null,
+      feeds: deps.registry.feeds.map((f) => ({
+        assetClasses: f.assetClasses,
+        feedId: f.feed.feedId,
+        delayMs: f.feed.delayMs,
+        configured: f.provider !== null,
+        streaming: f.provider !== null && f.streamKey !== null && deps.stream != null,
+      })),
     },
   };
 }
 
 async function resolveInstrument(url: URL, deps: RouterDeps) {
   const symbol = parseSymbol(url.searchParams.get('symbol'));
-  const instrument = await requireProvider(deps).resolveInstrument(symbol);
-  if (!instrument) throw new ApiError(404, 'not_found', `Unknown or inactive symbol ${symbol}`);
-  return { body: { instrument } };
+  const assetClass = parseAssetClass(url.searchParams.get('assetClass'));
+  const feed = deps.registry.forAssetClass(assetClass);
+  const instrument = await requireProvider(feed).resolveInstrument(symbol);
+  if (!instrument) {
+    throw assetClass === 'future'
+      ? new ApiError(404, 'not_found', reasonMessage('contract_not_found'), false, {
+          reason: 'contract_not_found',
+        })
+      : new ApiError(404, 'not_found', `Unknown or inactive symbol ${symbol}`);
+  }
+  return { body: { instrument, stream: streamInfo(feed!, deps) } };
 }
 
-async function loadInstrument(deps: RouterDeps, rawId: string | null) {
+/** Where the browser gets live data for an instrument (an opaque key), or null (history only). */
+function streamInfo(feed: RegisteredFeed, deps: RouterDeps): { key: string } | null {
+  return feed.streamKey !== null && deps.stream ? { key: feed.streamKey } : null;
+}
+
+async function loadInstrument(
+  deps: RouterDeps,
+  rawId: string | null,
+): Promise<{
+  instrument: Instrument;
+  feed: RegisteredFeed;
+  provider: HistoricalMarketDataProvider;
+}> {
   const { id, symbol } = parseInstrumentId(rawId);
-  const instrument = await requireProvider(deps).resolveInstrument(symbol);
+  const feed = deps.registry.forInstrumentId(id);
+  if (!feed) throw new ApiError(404, 'not_found', `Unknown instrument ${id}`);
+  const provider = requireProvider(feed);
+  const instrument = provider.getInstrument
+    ? await provider.getInstrument(id)
+    : symbol !== null
+      ? await provider.resolveInstrument(symbol)
+      : null;
   if (!instrument || instrument.id !== id) {
     throw new ApiError(404, 'not_found', `Unknown or inactive instrument ${id}`);
   }
-  return instrument;
+  return { instrument, feed, provider };
 }
 
 async function sessions(url: URL, deps: RouterDeps) {
   const { from, to } = parseRange(url.searchParams.get('from'), url.searchParams.get('to'));
-  const instrument = await loadInstrument(deps, url.searchParams.get('instrumentId'));
-  const result = [...(await requireProvider(deps).getSessions(instrument, from, to))].sort((a, b) =>
+  const { instrument, provider } = await loadInstrument(deps, url.searchParams.get('instrumentId'));
+  const result = [...(await provider.getSessions(instrument, from, to))].sort((a, b) =>
     a.sessionDate.localeCompare(b.sessionDate),
   );
   return { body: { sessions: result }, log: { sessions: result.length } };
@@ -184,8 +233,7 @@ async function bars(url: URL, deps: RouterDeps, request: Request) {
   const sessionMode = parseSessionMode(params.get('session'));
   const end = parseOptionalEnd(params.get('end'));
   const limit = parseLimit(params.get('limit'));
-  const instrument = await loadInstrument(deps, params.get('instrumentId'));
-  const provider = requireProvider(deps);
+  const { instrument, feed, provider } = await loadInstrument(deps, params.get('instrumentId'));
   const now = deps.now();
   const page = await loadCanonicalPage({
     provider,
@@ -194,8 +242,10 @@ async function bars(url: URL, deps: RouterDeps, request: Request) {
     mode: sessionMode,
     ...(end !== undefined ? { end } : {}),
     limit,
-    now,
-    historyFloor: deps.historyFloor,
+    // A delayed feed's data is complete only up to now - delay: a bucket that has ended in wall
+    // time but not in delayed time is still missing minutes, so it must stay provisional.
+    now: now - provider.feed.delayMs,
+    historyFloor: feed.historyFloor(),
     signal: request.signal,
   });
   const meta: BarSeriesMeta = {
@@ -214,4 +264,21 @@ async function bars(url: URL, deps: RouterDeps, request: Request) {
       truncated: page.diagnostics.truncated,
     },
   };
+}
+
+/**
+ * GET /api/v1/stream?key=<opaque> with `Upgrade: websocket`: after the origin and authentication
+ * checks, the upgrade is handed to the stream hub for that key (one hub per provider feed).
+ */
+async function forwardStream(url: URL, deps: RouterDeps, request: Request): Promise<Response> {
+  if (request.method !== 'GET') throw new ApiError(405, 'invalid_request', 'Method not allowed');
+  if ((request.headers.get('Upgrade') ?? '').toLowerCase() !== 'websocket') {
+    throw new ApiError(426, 'invalid_request', 'WebSocket upgrade required');
+  }
+  const key = parseStreamKey(url.searchParams.get('key'));
+  const feed = deps.registry.forStreamKey(key);
+  if (!feed) throw new ApiError(404, 'not_found', 'Unknown stream');
+  requireProvider(feed);
+  if (!deps.stream) throw new ApiError(503, 'unavailable', 'Streaming is not configured');
+  return deps.stream(key, request);
 }
