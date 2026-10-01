@@ -65,10 +65,13 @@ import {
   DrawingController,
   type DrawingInteractionState,
 } from './drawings/controller.ts';
+import type { DrawingHistoryState } from './drawings/history.ts';
+import { drawingCommandForKey, type KeyInput } from './drawings/keyboard.ts';
 import { paintDrawings } from './drawings/paint.ts';
 import type {
   Drawing,
   DrawingChange,
+  DrawingPatch,
   DrawingStyle,
   DrawingTool,
   DrawingType,
@@ -108,6 +111,8 @@ export interface FumeChartOptions {
   onDrawingToolChange?: (tool: DrawingTool) => void;
   /** The selected drawing changed (null: nothing selected). */
   onDrawingSelectionChange?: (id: string | null) => void;
+  /** Undo/redo availability changed (for enabling host buttons). */
+  onDrawingHistoryChange?: (state: DrawingHistoryState) => void;
   /** Id for a drawing the user creates. Default: crypto.randomUUID(). */
   createDrawingId?: () => string;
 }
@@ -214,6 +219,7 @@ export class FumeChart {
       onDrawingsChange: (drawings, change) => this.options.onDrawingsChange?.(drawings, change),
       onToolChange: (tool) => this.options.onDrawingToolChange?.(tool),
       onSelectionChange: (id) => this.options.onDrawingSelectionChange?.(id),
+      onHistoryChange: (state) => this.options.onDrawingHistoryChange?.(state),
       onInvalidate: () => this.invalidate('drawings'),
     });
     const layer = {
@@ -247,7 +253,7 @@ export class FumeChart {
     this.listen('pointerleave', () => this.onPointerLeave());
     this.listen('dblclick', (e) => this.onDoubleClick(e as MouseEvent));
     this.listen('wheel', (e) => this.onWheel(e as WheelEvent), { passive: false });
-    this.listen('keydown', (e) => this.onKeyDown(e as KeyboardEvent));
+    this.listen('keydown', (e) => this.handleKeyDown(e as KeyboardEvent));
   }
 
   /**
@@ -508,6 +514,60 @@ export class FumeChart {
     return this.drawings.getState();
   }
 
+  /**
+   * User edit of a drawing's style, visibility or lock state (e.g. from a host's style controls):
+   * one undo step and one onDrawingsChange. Allowed on locked drawings; hiding the selected
+   * drawing deselects it. False for an unknown id, an invalid or empty patch, or mid-gesture.
+   */
+  editDrawing(id: string, patch: DrawingPatch): boolean {
+    return !this.destroyed && this.drawings.edit(id, patch);
+  }
+
+  /**
+   * Duplicates a drawing (default: the selected one) 5 bars later and 4% of the visible price
+   * range lower, visible, unlocked, on top, and selects it. Returns the new id (null without a
+   * drawing or before the first frame).
+   */
+  duplicateDrawing(id?: string): string | null {
+    if (this.destroyed) return null;
+    return this.drawings.duplicate(id ?? null, this.getCoordinates());
+  }
+
+  /** Deletes a drawing (default: the selected one) as a user action; locked drawings are refused. */
+  deleteDrawing(id?: string): boolean {
+    return !this.destroyed && this.drawings.remove(id ?? null);
+  }
+
+  /** Undoes the last drawing mutation (never view, data or tool changes). */
+  undoDrawing(): boolean {
+    return !this.destroyed && this.drawings.undo();
+  }
+
+  redoDrawing(): boolean {
+    return !this.destroyed && this.drawings.redo();
+  }
+
+  getDrawingHistory(): DrawingHistoryState {
+    return this.drawings.getHistoryState();
+  }
+
+  /**
+   * Drawing keyboard shortcuts (drawings/keyboard.ts). The chart calls this for keys on its own
+   * surface; a host may forward page-level keydown events too. Keys in text fields/selects and
+   * events already handled (defaultPrevented) are ignored, so forwarding never acts twice.
+   * Returns true (and prevents the default) when a command ran.
+   */
+  handleKeyDown(
+    e: KeyInput & { defaultPrevented?: boolean; preventDefault?: () => void },
+  ): boolean {
+    if (this.destroyed || e.defaultPrevented) return false;
+    const cmd = drawingCommandForKey(e);
+    if (!cmd || !this.drawings.command(cmd, this.getCoordinates())) return false;
+    e.preventDefault?.();
+    this.updateCursor();
+    return true;
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
@@ -529,6 +589,7 @@ export class FumeChart {
     delete this.options.onDrawingsChange;
     delete this.options.onDrawingToolChange;
     delete this.options.onDrawingSelectionChange;
+    delete this.options.onDrawingHistoryChange;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -940,14 +1001,6 @@ export class FumeChart {
         : panView(this.view, action.dxPx, ctx, DEFAULT_VIEW_LIMITS);
     this.pointer = { x: e.offsetX, y: e.offsetY };
     this.invalidate('main');
-  }
-
-  private onKeyDown(e: KeyboardEvent): void {
-    if (this.destroyed) return;
-    if (this.drawings.keyDown(e.key)) {
-      e.preventDefault();
-      this.updateCursor();
-    }
   }
 
   private focusSurface(): void {

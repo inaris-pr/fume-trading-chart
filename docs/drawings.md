@@ -1,10 +1,12 @@
 # Drawings and overlays
 
-Status: **Stage 7 "drawing foundation"** (2026-10-01, uncommitted). The drawing system lives in the
-chart engine (`packages/chart/src/drawings/`, `packages/chart/src/coordinates.ts`); the React
-wrapper only passes it through, and the reference app adds a toolbar. Implemented: trend line
-(complete vertical slice), horizontal line, rectangle. Not yet: other tools (see "Extension
-points"), styling UI, persistence (host-owned by design).
+Status: **Stage 8 "drawing UX"** (2026-10-01, uncommitted) on top of the Stage 7 foundation. The
+drawing system lives in the chart engine (`packages/chart/src/drawings/`,
+`packages/chart/src/coordinates.ts`); the React wrapper only passes it through, and the reference
+app provides the visual controls. Tools: trend line, horizontal line, rectangle. Stage 8 added
+style editing, lock, visibility, duplicate, undo/redo, keyboard shortcuts and selection polish
+(see "Drawing UX (Stage 8)"). Not yet: other tools (see "Extension points"), persistence
+(host-owned by design).
 
 ## Architecture
 
@@ -32,7 +34,9 @@ FumeChart
 | `drawings/model.ts`      | Versioned, serializable drawing model; `serializeDrawings`, `parseDrawingDocument` |
 | `drawings/geometry.ts`   | Anchors → screen shapes and handles; `moveHandle`, `translateDrawing`              |
 | `drawings/hit-test.ts`   | Screen-space hit-testing (handle / body / empty)                                   |
-| `drawings/controller.ts` | Tool/interaction state machine + the drawing set (framework-free, no DOM)          |
+| `drawings/controller.ts` | Tool/interaction state machine, the drawing set, user commands (framework-free)    |
+| `drawings/history.ts`    | Undo/redo stack of drawing-set snapshots (framework-free)                          |
+| `drawings/keyboard.ts`   | Keyboard shortcut map and text-field guard (pure)                                  |
 | `drawings/paint.ts`      | Paints the drawing canvas (the only module touching a 2D context)                  |
 | `chart.ts`               | Owns the canvas, routes pointer/key input to the controller, schedules repaints    |
 
@@ -120,8 +124,8 @@ converted to bar indices.
 - **The engine owns** rendering, hit-testing, the tool state machine and the in-memory drawing set
   of one chart.
 - **The host owns persistence.** `onDrawingsChange(drawings, change)` reports the complete new set
-  after every user edit (`change = { kind: 'add' | 'update' | 'remove', id }`), once per edit and
-  never per pointer move. The host stores it (e.g. `serializeDrawings`) and restores it with
+  after every user edit (`change = { kind: 'add' | 'update' | 'remove', id, source }`, `source`
+  `'edit' | 'undo' | 'redo'`), once per edit and never per pointer move. The host stores it (e.g. `serializeDrawings`) and restores it with
   `setDrawings`. `setDrawings` is not echoed back, so a controlled `drawings` prop cannot loop.
 - **Per symbol:** the engine keeps whatever set it is given across `setData` (timeframe and symbol
   switches). Keying drawings by instrument is the host's choice; the reference app keeps them in
@@ -139,19 +143,30 @@ chart.selectDrawing(id | null);
 chart.getSelectedDrawingId();
 chart.getCoordinates(); // ChartCoordinates | null
 chart.getDrawingInteractionState(); // inspection: idle / drawing / dragging-*
-// FumeChartOptions: onDrawingsChange, onDrawingToolChange, onDrawingSelectionChange, createDrawingId
+// Stage 8 user commands (each = one undo step + one onDrawingsChange):
+chart.editDrawing(id, { style?, visible?, locked? }); // style patch: fillColor: null removes the fill
+chart.duplicateDrawing(id?); // default: the selected drawing; returns the new id
+chart.deleteDrawing(id?); // default: the selected drawing; refused for locked drawings
+chart.undoDrawing(); chart.redoDrawing(); chart.getDrawingHistory(); // { canUndo, canRedo }
+chart.handleKeyDown(event); // the shortcut map; hosts may forward page-level keydown events
+// FumeChartOptions: onDrawingsChange, onDrawingToolChange, onDrawingSelectionChange,
+//   onDrawingHistoryChange, createDrawingId
 ```
 
-`add/update/remove/clearDrawings` were left out deliberately: the host composes them over
-`getDrawings()` + `setDrawings()` (immutable arrays), which keeps one write path and one rule
-("host writes are not echoed"). Model helpers are exported too: `serializeDrawings`,
+Two write paths with one rule each: **host replacement** (`setDrawings`: host data such as another
+symbol's set; not echoed, clears the history) and **user commands** (pointer gestures and the
+methods above: reported through `onDrawingsChange` and recorded in the history). No generic
+`add/update/remove/clearDrawings`: hosts compose those over `getDrawings()` + `setDrawings()`. Model helpers are exported too: `serializeDrawings`,
 `parseDrawingDocument`, `DrawingSchemaError`, `DRAWING_SCHEMA_VERSION`, `ANCHOR_COUNT`.
 
 ### `@fume/react`
 
-`<FumeChartView drawings onDrawingsChange onDrawingToolChange onDrawingSelectionChange />` plus
-handle methods `setDrawingTool`, `getDrawingTool`, `getDrawings` (docs/embedding.md). The wrapper
-holds no drawing logic and no drawing state.
+`<FumeChartView drawings onDrawingsChange onDrawingToolChange onDrawingSelectionChange
+onDrawingHistoryChange />` plus handle methods that delegate 1:1 to the engine (`setDrawingTool`,
+`getDrawingTool`, `getDrawings`, `selectDrawing`, `getSelectedDrawingId`, `editDrawing`,
+`duplicateDrawing`, `deleteDrawing`, `undoDrawing`, `redoDrawing`, `getDrawingHistory`,
+`handleKeyDown`; docs/embedding.md). The wrapper holds no drawing logic, no history and no
+drawing state.
 
 ## Interaction state machine (`DrawingController`)
 
@@ -167,21 +182,22 @@ holds no drawing logic and no drawing state.
     └──── release: update event (if moved) ◀────┴──── Escape / pointercancel: revert, no event
 ```
 
-- **idle** (cursor tool): press on a drawing selects it (and starts a drag unless locked); press
-  on empty space clears the selection and is **not consumed**, so the chart pans. Hover is tracked
-  for highlighting and the cursor (`pointer` on a body, `move` on a handle).
+- **idle** (cursor tool): press on a drawing selects it and, unless it is locked, starts a drag
+  that only moves the drawing once the pointer travels more than 3 px (a click never nudges it).
+  Press on empty space clears the selection and is **not consumed**, so the chart pans; a press on
+  a locked drawing selects it and is not consumed either (dragging across it pans the chart).
+  Hover is tracked for highlighting and the cursor (`grab` on a movable body, `pointer` on a
+  locked one, `move` on a handle, `grabbing` while dragging).
 - **drawing** (a drawing tool is active): each primary press places an anchor at the snapped
   position. Two-anchor tools also accept press-drag-release (drag-to-create, beyond 6 px). The
   preview follows the pointer. A second click within 3 px of the first anchor is ignored (no
   zero-length drawings). Finishing adds the drawing, selects it and returns the tool to `cursor`
   (one drawing per activation). `Escape` cancels the unfinished drawing and returns to the cursor.
 - **dragging-handle / dragging-drawing**: only the pressing pointer moves the drawing; other
-  pointers are swallowed (no pan). Nothing is reported during the drag; release reports one
-  `update`. `Escape` or `pointercancel` reverts to the original drawing without an event.
-- **Keyboard** (the overlay canvas takes focus on a press in the plot; it is focusable from script
-  only, not a tab stop): `Delete`/`Backspace` removes the selected unlocked drawing (one `remove`
-  event); `Escape` cancels/deselects. The reference app also maps `Escape` globally while a tool is
-  active, because the toolbar button may hold the focus.
+  pointers are swallowed (no pan). Nothing is reported during the drag; release commits one
+  `update` (one history step). `Escape` or `pointercancel` restores exactly the set from before
+  the press, without an event or history step.
+- **Keyboard**: see "Keyboard shortcuts" below.
 - Non-primary buttons never create or move drawings; presses outside the plot (price axis) keep
   their chart meaning (price scaling).
 
@@ -192,10 +208,90 @@ zoom, pan, resize and price scaling. Only points inside the plot can hit.
 
 1. **Handles** of the selected, unlocked drawing: the nearest handle within 9 px (painted radius
    5 px) wins over everything.
-2. **Bodies**, from the top of the z-order (last drawn) down: within 6 px + half the line width of
+2. **The selected drawing's body** (so a selected drawing lying under another one can still be
+   dragged; select it from the host's list or by clicking where it is on top).
+3. **Other bodies**, from the top of the z-order (last drawn; new and duplicated drawings go on
+   top) down: within 6 px + half the line width of
    a segment (distance clamped to the segment ends), of a horizontal line's y, or of a rectangle's
    edge; a filled rectangle is also hit anywhere inside.
-3. Otherwise **empty space** (null).
+4. Otherwise **empty space** (null). Hidden drawings have no geometry and never hit.
+
+## Drawing UX (Stage 8)
+
+### Style editing
+
+`editDrawing(id, { style })` changes `color`, `lineWidth` (> 0), `lineStyle` (solid / dashed /
+dotted) and, for rectangles, `fillColor` (any CSS color; the reference UI writes `rgba(r, g, b, a)`
+so fill **opacity** is part of the existing field; `fillColor: null` removes the fill, which also
+makes the inside non-hittable). No new schema fields, **schema version stays 1**. An edit applies
+at once (drawing layer only; the candle layer is not repainted), is one undo step, is reported
+through `onDrawingsChange`, never touches the anchors, and an invalid or no-op patch is refused
+without an event.
+
+### Lock
+
+`locked: true` drawings: visible; selectable (by click or `selectDrawing`); shown with small solid
+markers instead of edit handles; cannot be dragged (whole or by handle: a press on them pans the
+chart); cannot be deleted by `Delete`/`Backspace` or `deleteDrawing` (the host can still drop them
+via `setDrawings`); can be restyled, hidden, duplicated and unlocked (`editDrawing(id, { locked:
+false })`).
+
+### Visibility
+
+`visible: false` drawings stay in the set with their anchors and style but are not painted, not
+hit-tested and cannot be selected; hiding the selected drawing deselects it. They are restored with
+`editDrawing(id, { visible: true })`; the reference app does this from a minimal drawing list.
+
+### Duplicate
+
+`duplicateDrawing(id?)` copies a drawing with a new id (from `createDrawingId`), the same type and
+style, `visible: true`, `locked: false`, placed on top and selected. Placement is deterministic and
+session-aware, in market units only: **5 bars later** (whole slots of the current timeframe through
+the session axis, so a copy near the close continues in the next session, never in closed time) and
+**4 % of the visible price range lower**; if the calendar does not reach 5 bars further it tries 5
+bars earlier, then a price-only move. Nothing is computed or stored in pixels.
+
+### Undo / redo
+
+- `DrawingHistory` keeps immutable snapshots: each entry is the drawing set before and after one
+  completed user mutation plus the selection on both sides, so undo/redo restore exactly (no
+  re-computed inverse operations). Limit: 100 steps.
+- Recorded: create, delete, whole-drawing drag, handle drag, duplicate, style, lock, visibility.
+  Not recorded: pan, zoom, price scaling, timeframe/symbol switches, live candles, crosshair,
+  selection, tool changes, cancelled gestures (Escape / pointercancel) and plain clicks.
+- One drag = one step (committed on release). A new mutation after an undo clears the redo stack.
+- Undo/redo report `onDrawingsChange` with `source: 'undo' | 'redo'` and the effective `kind`
+  (undoing an add reports a remove). `onDrawingHistoryChange({ canUndo, canRedo })` fires when
+  availability changes.
+- Undo/redo are ignored while a gesture is in progress. `setDrawings` with another array (e.g. the
+  host switches to another symbol's set) clears the history, which described the previous set;
+  passing back the array the chart reported (a controlled prop) does not.
+
+### Keyboard shortcuts
+
+| Keys                             | Action                                                         |
+| -------------------------------- | -------------------------------------------------------------- |
+| `Escape`                         | cancel an unfinished drawing / revert a drag; else deselect    |
+| `Delete`, `Backspace`            | delete the selected drawing (not when locked)                  |
+| `Ctrl+Z` (`⌘Z`)                  | undo                                                           |
+| `Ctrl+Shift+Z`, `Ctrl+Y` (`⌘⇧Z`) | redo                                                           |
+| `Ctrl+D` (`⌘D`)                  | duplicate the selected drawing (prevents the browser bookmark) |
+
+- The chart handles them on its own surface (the overlay canvas takes focus on a press in the plot;
+  focusable from script only, not a tab stop). Hosts may forward page-level `keydown` events to
+  `handleKeyDown` (the reference app does, so shortcuts also work after clicking a toolbar button).
+- Keys typed into inputs, textareas, selects or contenteditable elements are never commands;
+  events already handled (`defaultPrevented`, e.g. by the chart's own listener) are ignored, so
+  forwarding never acts twice. A key is `preventDefault`ed only when a command actually ran (e.g.
+  `Ctrl+Y` with nothing to redo keeps its browser meaning). Alt combinations are ignored.
+
+### Reference UI (apps/web)
+
+The engine has no drawing UI. The reference app adds: the left rail (tools, undo/redo enabled from
+`onDrawingHistoryChange`, a drawing-list toggle with a count), a compact floating bar for the
+selected drawing (line color palette, width, style, rectangle fill color + opacity, lock, hide,
+duplicate, delete; disabled delete when locked) and a minimal drawing list (show/hide, lock,
+select). All controls are discrete (swatches, selects, buttons), so each click is one undo step.
 
 ## Performance
 
@@ -227,6 +323,7 @@ the coordinate system and the public API stay unchanged.
 
 - Drawings whose anchors lie outside the resolved calendar are hidden until history covering them
   is loaded (no extrapolation, see "Session gaps").
-- No price magnet/snapping to OHLC, no styling UI, no z-order editing, no multi-select, no undo.
+- No price magnet/snapping to OHLC, no z-order editing, no multi-select, no free color picker
+  (palette only in the reference UI).
 - Touch: pointer events work, but there is no long-press/touch-specific handling yet.
 - Persistence, per-account storage and sharing are host concerns (not implemented in Fume yet).

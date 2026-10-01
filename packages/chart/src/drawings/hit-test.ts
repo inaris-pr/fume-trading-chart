@@ -2,8 +2,10 @@
  * Deterministic hit-testing of drawing geometry in screen space (CSS px), so it keeps working
  * after any zoom, pan, resize or price-scale change: geometry is always the current frame's.
  *
- * Priority: handles of the selected (unlocked) drawing, then drawing bodies from the top of the
- * z-order (last drawn) down, then empty space (null). Only points inside the plot can hit.
+ * Priority (deterministic): handles of the selected (unlocked) drawing, then the selected
+ * drawing's body (so a selected drawing under another one can still be dragged), then the other
+ * bodies from the top of the z-order (last drawn) down, then empty space (null). Only points
+ * inside the plot can hit; hidden drawings have no geometry and never hit.
  */
 import type { ChartPoint } from '../coordinates.ts';
 import type { Rect } from '../layout.ts';
@@ -26,9 +28,10 @@ export function hitTestDrawings(
   selectedId: string | null,
 ): DrawingHit | null {
   if (!insideRect(point, plot)) return null;
-  if (selectedId !== null) {
-    const selected = geometries.find((g) => g.drawing.id === selectedId);
-    if (selected && !selected.drawing.locked) {
+  const selected =
+    selectedId === null ? undefined : geometries.find((g) => g.drawing.id === selectedId);
+  if (selected) {
+    if (!selected.drawing.locked) {
       let best = -1;
       let bestDist = HANDLE_HIT_RADIUS;
       selected.handles.forEach((h, i) => {
@@ -38,8 +41,9 @@ export function hitTestDrawings(
           bestDist = d;
         }
       });
-      if (best >= 0) return { kind: 'handle', id: selectedId, handle: best };
+      if (best >= 0) return { kind: 'handle', id: selected.drawing.id, handle: best };
     }
+    if (hitsBody(selected, point)) return { kind: 'body', id: selected.drawing.id };
   }
   for (let i = geometries.length - 1; i >= 0; i--) {
     const g = geometries[i]!;

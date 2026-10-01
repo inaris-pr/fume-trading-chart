@@ -121,3 +121,28 @@ export function translateDrawing(
   }
   return { ...drawing, anchors };
 }
+
+/** Bars a duplicate is moved right of its original (whole slots of the current timeframe). */
+export const DUPLICATE_BAR_OFFSET = 5;
+/** Fraction of the visible price range a duplicate is moved down. */
+export const DUPLICATE_PRICE_OFFSET = 0.04;
+
+/**
+ * The anchors of a duplicate of `drawing` (pure, market units only): moved DUPLICATE_BAR_OFFSET
+ * whole bars later through the session axis (so it never lands in closed time) and
+ * DUPLICATE_PRICE_OFFSET of the visible price range lower. Falls back to an earlier move, then to
+ * a price-only move, where the calendar does not reach far enough.
+ */
+export function duplicateAnchors(
+  drawing: Drawing,
+  coords: ChartCoordinates,
+): readonly DrawingAnchor[] {
+  const { plot } = coords;
+  const range = coords.yToPrice(plot.y) - coords.yToPrice(plot.y + plot.height);
+  const priceDelta = -DUPLICATE_PRICE_OFFSET * range;
+  for (const bars of [DUPLICATE_BAR_OFFSET, -DUPLICATE_BAR_OFFSET]) {
+    const moved = translateDrawing(drawing, bars, priceDelta, coords);
+    if (moved) return moved.anchors;
+  }
+  return drawing.anchors.map((a) => ({ time: a.time, price: a.price + priceDelta }));
+}

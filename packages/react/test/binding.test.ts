@@ -195,6 +195,41 @@ describe('drawings pass through to the chart engine', () => {
   });
 });
 
+describe('drawing commands delegate to the engine', () => {
+  test('edit, duplicate, delete, undo/redo and history events pass through unchanged', async () => {
+    const r = replayFeed();
+    const env = new FakeEnvironment();
+    const history: { canUndo: boolean; canRedo: boolean }[] = [];
+    const binding = new ChartViewBinding(fakeContainer(), {
+      datafeed: r.feed,
+      environment: env,
+      onDrawingHistoryChange: (s) => history.push(s),
+    });
+    await binding.apply({ symbol: 'SPY', assetClass: 'equity', timeframe: '5m' });
+    env.resizeCallback!({ cssWidth: 800, cssHeight: 500 });
+    env.flushFrames();
+    binding.setDrawingTool('horizontal-line');
+    const overlay = env.canvases[1]!;
+    overlay.dispatch('pointerdown', { offsetX: 300, offsetY: 200, pointerId: 1, button: 0 });
+    overlay.dispatch('pointerup', { offsetX: 300, offsetY: 200, pointerId: 1, button: 0 });
+    const id = binding.getSelectedDrawingId()!;
+    expect(binding.editDrawing(id, { style: { lineStyle: 'dashed' } })).toBe(true);
+    const copy = binding.duplicateDrawing();
+    expect(copy).not.toBeNull();
+    expect(binding.getDrawings()).toHaveLength(2);
+    expect(binding.deleteDrawing(copy!)).toBe(true);
+    expect(binding.undoDrawing()).toBe(true);
+    expect(binding.getDrawings()).toHaveLength(2);
+    expect(binding.redoDrawing()).toBe(true);
+    expect(binding.handleKeyDown({ key: 'z', ctrlKey: true })).toBe(true);
+    expect(binding.getDrawingHistory()).toEqual({ canUndo: true, canRedo: true });
+    expect(history.at(-1)).toEqual({ canUndo: true, canRedo: true });
+    binding.dispose();
+    expect(binding.undoDrawing()).toBe(false);
+    expect(binding.getDrawingHistory()).toEqual({ canUndo: false, canRedo: false });
+  });
+});
+
 describe('a shared FumeApiDataFeed stays shareable', () => {
   beforeEach(() => {
     vi.stubGlobal('location', {

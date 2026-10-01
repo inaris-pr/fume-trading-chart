@@ -74,6 +74,7 @@ export function paintDrawings(
   }
   if (state.preview) paintShape(ctx, state.preview, plot.x, plot.width, pr, false);
   if (selected && !selected.drawing.locked) paintHandles(ctx, selected, pr, theme);
+  if (selected?.drawing.locked) paintLockedMarkers(ctx, selected, pr, theme);
   if (state.preview) paintHandles(ctx, state.preview, pr, theme);
   ctx.restore();
 }
@@ -139,6 +140,23 @@ function paintHandles(
     ctx.stroke();
   }
 }
+
+/** Selected but locked: small solid dots at the handle positions (selected, not editable). */
+function paintLockedMarkers(
+  ctx: DrawingPaintContext,
+  g: DrawingGeometry,
+  pr: number,
+  theme: ChartTheme,
+): void {
+  ctx.fillStyle = theme.axisText;
+  for (const h of g.handles) {
+    ctx.beginPath();
+    ctx.arc(h.x * pr, h.y * pr, LOCKED_MARKER_RADIUS * pr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+const LOCKED_MARKER_RADIUS = 2.5;
 
 function dashPattern(lineStyle: LineStyle, width: number, pr: number): number[] {
   if (lineStyle === 'dashed') return [Math.round(6 * pr) + width, Math.round(4 * pr) + width];

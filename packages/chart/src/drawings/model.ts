@@ -58,6 +58,70 @@ export interface Drawing {
 export interface DrawingChange {
   kind: 'add' | 'update' | 'remove';
   id: string;
+  /**
+   * `edit`: a direct user edit; `undo` / `redo`: history navigation (the kind is then the effect,
+   * e.g. undoing an add reports a remove).
+   */
+  source: 'edit' | 'undo' | 'redo';
+}
+
+/** Style fields to change; `fillColor: null` removes the fill. Omitted fields stay as they are. */
+export type DrawingStylePatch = Partial<Omit<DrawingStyle, 'fillColor'>> & {
+  fillColor?: string | null;
+};
+
+/** A user edit of a drawing's appearance or state (never its anchors; those change by dragging). */
+export interface DrawingPatch {
+  style?: DrawingStylePatch;
+  visible?: boolean;
+  locked?: boolean;
+}
+
+const LINE_STYLES: readonly LineStyle[] = ['solid', 'dashed', 'dotted'];
+
+/**
+ * The drawing with `patch` applied (pure), the same object when nothing changes, or null when the
+ * patch is invalid (empty color, non-positive or non-finite width, unknown line style).
+ */
+export function applyDrawingPatch(drawing: Drawing, patch: DrawingPatch): Drawing | null {
+  const style: DrawingStyle = { ...drawing.style };
+  const p = patch.style ?? {};
+  if (p.color !== undefined) {
+    if (typeof p.color !== 'string' || p.color.trim() === '') return null;
+    style.color = p.color;
+  }
+  if (p.lineWidth !== undefined) {
+    if (!Number.isFinite(p.lineWidth) || p.lineWidth <= 0) return null;
+    style.lineWidth = p.lineWidth;
+  }
+  if (p.lineStyle !== undefined) {
+    if (!LINE_STYLES.includes(p.lineStyle)) return null;
+    style.lineStyle = p.lineStyle;
+  }
+  if (p.fillColor === null) {
+    delete style.fillColor;
+  } else if (p.fillColor !== undefined) {
+    if (typeof p.fillColor !== 'string' || p.fillColor.trim() === '') return null;
+    style.fillColor = p.fillColor;
+  }
+  const next: Drawing = {
+    ...drawing,
+    style,
+    visible: patch.visible ?? drawing.visible,
+    locked: patch.locked ?? drawing.locked,
+  };
+  return sameDrawingState(drawing, next) ? drawing : next;
+}
+
+function sameDrawingState(a: Drawing, b: Drawing): boolean {
+  return (
+    a.visible === b.visible &&
+    a.locked === b.locked &&
+    a.style.color === b.style.color &&
+    a.style.lineWidth === b.style.lineWidth &&
+    a.style.lineStyle === b.style.lineStyle &&
+    a.style.fillColor === b.style.fillColor
+  );
 }
 
 /** Persisted form: a versioned envelope around the drawings. JSON-safe. */

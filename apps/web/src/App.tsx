@@ -5,9 +5,12 @@ import { isReplaySymbol, REPLAY_SYMBOLS } from '@fume/replay';
 import {
   FumeChartView,
   type Drawing,
+  type DrawingHistoryState,
   type DrawingTool,
   type FumeChartViewHandle,
 } from '@fume/react';
+import { DrawingList } from './DrawingList.tsx';
+import { DrawingProperties } from './DrawingProperties.tsx';
 import { DrawingToolbar } from './DrawingToolbar.tsx';
 import { feedLabel, feedTitle } from './feed-label.ts';
 import { TwoChartProof } from './TwoChartProof.tsx';
@@ -118,6 +121,7 @@ function contractInfo(instrument: Instrument): { text: string; title: string } |
 }
 
 const NO_DRAWINGS: readonly Drawing[] = [];
+const NO_HISTORY: DrawingHistoryState = { canUndo: false, canRedo: false };
 
 export function App() {
   const [mode] = useState(sourceMode);
@@ -134,15 +138,16 @@ export function App() {
   const [tool, setTool] = useState<DrawingTool>('cursor');
   // In memory only (no persistence yet): drawings per instrument, kept across timeframes.
   const [drawings, setDrawings] = useState<Record<string, readonly Drawing[]>>({});
+  const [selectedDrawing, setSelectedDrawing] = useState<string | null>(null);
+  const [history, setHistory] = useState<DrawingHistoryState>(NO_HISTORY);
+  const [listOpen, setListOpen] = useState(false);
   useEffect(() => {
-    // Escape also leaves a drawing tool while the focus is on the toolbar, not the chart.
-    if (tool === 'cursor') return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') viewRef.current?.setDrawingTool('cursor');
-    };
+    // Drawing shortcuts also work while the focus is on the toolbar or the page (not only on the
+    // chart). The engine ignores text fields and keys it already handled on its own surface.
+    const onKey = (e: KeyboardEvent) => void viewRef.current?.handleKeyDown(e);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tool]);
+  }, []);
   if (mode === 'api' && params().get('proof') === 'two-charts') {
     return <TwoChartProof datafeed={feed} />;
   }
@@ -157,6 +162,8 @@ export function App() {
   const contract = shown ? contractInfo(shown) : null;
   const streaming = ready?.streaming ?? false;
   const drawingKey = optionValue(selection.assetClass, selection.symbol);
+  const shownDrawings = drawings[drawingKey] ?? NO_DRAWINGS;
+  const selected = shownDrawings.find((d) => d.id === selectedDrawing) ?? null;
 
   return (
     <div className="app">
@@ -238,7 +245,25 @@ export function App() {
         )}
       </header>
       <div className="workspace">
-        <DrawingToolbar tool={tool} onSelect={(next) => viewRef.current?.setDrawingTool(next)} />
+        <DrawingToolbar
+          tool={tool}
+          onSelect={(next) => viewRef.current?.setDrawingTool(next)}
+          history={history}
+          onUndo={() => viewRef.current?.undoDrawing()}
+          onRedo={() => viewRef.current?.redoDrawing()}
+          drawingCount={shownDrawings.length}
+          listOpen={listOpen}
+          onToggleList={() => setListOpen((open) => !open)}
+        />
+        {listOpen && (
+          <DrawingList
+            drawings={shownDrawings}
+            selectedId={selectedDrawing}
+            onSelect={(id) => viewRef.current?.selectDrawing(id)}
+            onEdit={(id, patch) => viewRef.current?.editDrawing(id, patch)}
+            onClose={() => setListOpen(false)}
+          />
+        )}
         <main className="chart-area">
           <FumeChartView
             ref={viewRef}
@@ -250,10 +275,21 @@ export function App() {
             statusOverlay={mode === 'api' ? statusText : false}
             onStatus={setStatus}
             onStreamState={setStream}
-            drawings={drawings[drawingKey] ?? NO_DRAWINGS}
+            drawings={shownDrawings}
             onDrawingsChange={(next) => setDrawings((all) => ({ ...all, [drawingKey]: next }))}
             onDrawingToolChange={setTool}
+            onDrawingSelectionChange={setSelectedDrawing}
+            onDrawingHistoryChange={setHistory}
           />
+          {selected && (
+            <DrawingProperties
+              key={selected.id}
+              drawing={selected}
+              onEdit={(patch) => viewRef.current?.editDrawing(selected.id, patch)}
+              onDuplicate={() => viewRef.current?.duplicateDrawing(selected.id)}
+              onDelete={() => viewRef.current?.deleteDrawing(selected.id)}
+            />
+          )}
         </main>
       </div>
     </div>

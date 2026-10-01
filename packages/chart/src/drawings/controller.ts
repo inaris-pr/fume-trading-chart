@@ -1,8 +1,9 @@
 /**
- * Drawing interaction controller: the framework-independent tool state machine plus the drawing
- * set it edits. FumeChart feeds it pointer/keyboard input (CSS px) with the current frame's
- * coordinates; it decides whether the input belongs to drawings (consumed) or to the chart
- * (pan/zoom), mutates drawings immutably and reports user changes. No DOM, no canvas, no React.
+ * Drawing interaction controller: the framework-independent tool state machine, the drawing set it
+ * edits and its undo/redo history. FumeChart feeds it pointer/keyboard input (CSS px) with the
+ * current frame's coordinates; it decides whether the input belongs to drawings (consumed) or to
+ * the chart (pan/zoom), mutates drawings immutably and reports user changes. No DOM, no canvas,
+ * no React.
  *
  * States (docs/drawings.md):
  *   idle              cursor tool, nothing in progress (selection and hover live beside it)
@@ -10,30 +11,52 @@
  *   dragging-drawing  moving a whole drawing (by whole bars + a price delta)
  *   dragging-handle   moving one handle (anchor or rectangle corner)
  *
- * Events: onDrawingsChange only for USER edits (add/update/remove; host replacements via
- * setDrawings are not echoed); onToolChange and onSelectionChange for every change. Nothing is
- * reported during a drag: one update is reported when it ends, so hosts never re-render per move.
+ * One mutation path: every USER mutation (create, drag, handle drag, delete, duplicate, style,
+ * lock, visibility) goes through commit(): one history entry and one onDrawingsChange each.
+ * Host replacements (setDrawings) are not echoed and clear the history. Nothing is reported during
+ * a drag; one update is committed when it ends, so hosts never re-render per pointer move.
  */
 import type { UnixMs } from '@fume/core';
 import type { ChartCoordinates, ChartPoint } from '../coordinates.ts';
 import {
   anchorAt,
   drawingGeometry,
+  duplicateAnchors,
   moveHandle,
   pointOf,
   translateDrawing,
   type DrawingGeometry,
 } from './geometry.ts';
+import {
+  DrawingHistory,
+  inverseChange,
+  type DrawingHistoryEntry,
+  type DrawingHistoryState,
+} from './history.ts';
 import { hitTestDrawings, type DrawingHit } from './hit-test.ts';
+import type { DrawingCommand } from './keyboard.ts';
 import {
   ANCHOR_COUNT,
+  applyDrawingPatch,
   type Drawing,
   type DrawingAnchor,
   type DrawingChange,
+  type DrawingPatch,
   type DrawingStyle,
   type DrawingTool,
   type DrawingType,
 } from './model.ts';
+
+interface DragBase {
+  id: string;
+  pointerId: number;
+  original: Drawing;
+  /** The whole drawing set when the drag started (restored exactly on cancel; history "before"). */
+  startDrawings: readonly Drawing[];
+  /** Where the press happened; nothing moves until the pointer leaves DRAG_START_THRESHOLD. */
+  press: ChartPoint;
+  moved: boolean;
+}
 
 export type DrawingInteractionState =
   | { kind: 'idle' }
@@ -47,24 +70,13 @@ export type DrawingInteractionState =
       /** Where the first anchor was pressed, while that press is still down (drag-to-create). */
       press: { pointerId: number; at: ChartPoint } | null;
     }
-  | {
+  | (DragBase & {
       kind: 'dragging-drawing';
-      id: string;
-      pointerId: number;
-      original: Drawing;
       /** Exact time/price under the pointer when the drag started. */
       startTime: UnixMs;
       startPrice: number;
-      moved: boolean;
-    }
-  | {
-      kind: 'dragging-handle';
-      id: string;
-      pointerId: number;
-      original: Drawing;
-      handle: number;
-      moved: boolean;
-    };
+    })
+  | (DragBase & { kind: 'dragging-handle'; handle: number });
 
 export interface DrawingPointer {
   x: number;
@@ -81,6 +93,7 @@ export interface DrawingControllerOptions {
   onDrawingsChange?: (drawings: readonly Drawing[], change: DrawingChange) => void;
   onToolChange?: (tool: DrawingTool) => void;
   onSelectionChange?: (id: string | null) => void;
+  onHistoryChange?: (state: DrawingHistoryState) => void;
   /** The drawing layer needs a repaint. */
   onInvalidate?: () => void;
 }
@@ -89,6 +102,8 @@ export interface DrawingControllerOptions {
 export const DRAG_CREATE_THRESHOLD = 6;
 /** Second click this close (CSS px) to the first anchor is ignored (no zero-length drawings). */
 export const MIN_DRAWING_SIZE = 3;
+/** A press on a drawing only starts moving it beyond this distance (CSS px): clicks never nudge. */
+export const DRAG_START_THRESHOLD = 3;
 
 const IDLE: DrawingInteractionState = { kind: 'idle' };
 
@@ -99,6 +114,8 @@ export class DrawingController {
   private hover: DrawingHit | null = null;
   private state: DrawingInteractionState = IDLE;
   private options: DrawingControllerOptions | null;
+  private readonly history = new DrawingHistory();
+  private reportedHistory = 'false|false';
   private cache: {
     coords: ChartCoordinates;
     drawings: readonly Drawing[];
@@ -115,15 +132,19 @@ export class DrawingController {
     return this.drawings;
   }
 
-  /** Replaces the drawing set (host-owned data; not reported back). Cancels a drag in progress. */
+  /**
+   * Replaces the drawing set (host-owned data; not reported back). Cancels a drag in progress and
+   * clears the undo history, which described the previous set. The same array is a no-op.
+   */
   setDrawings(drawings: readonly Drawing[]): void {
     if (drawings === this.drawings) return;
     if (this.state.kind === 'dragging-drawing' || this.state.kind === 'dragging-handle')
       this.state = IDLE;
     this.drawings = drawings;
     this.hover = null;
-    if (this.selectedId !== null && !drawings.some((d) => d.id === this.selectedId))
-      this.setSelected(null);
+    this.history.clear();
+    this.reportHistory();
+    if (this.selectedId !== null && !this.isSelectable(this.selectedId)) this.setSelected(null);
     this.invalidate();
   }
 
@@ -147,8 +168,9 @@ export class DrawingController {
     return this.selectedId;
   }
 
+  /** Selects a visible drawing (hidden or unknown ids clear the selection). */
   select(id: string | null): void {
-    this.setSelected(id !== null && this.drawings.some((d) => d.id === id) ? id : null);
+    this.setSelected(id !== null && this.isSelectable(id) ? id : null);
     this.invalidate();
   }
 
@@ -160,14 +182,18 @@ export class DrawingController {
     return this.hover;
   }
 
+  getHistoryState(): DrawingHistoryState {
+    return this.history.state();
+  }
+
   /**
    * Abandons an unfinished drawing (the tool stays active) or reverts a drag in progress. Used
-   * when the chart's data is replaced under the interaction.
+   * when the chart's data is replaced under the interaction. Never enters the history.
    */
   cancelInteraction(): void {
     const s = this.state;
     if (s.kind === 'dragging-drawing' || s.kind === 'dragging-handle') {
-      this.replace(s.original);
+      this.drawings = s.startDrawings;
       this.state = IDLE;
     } else if (s.kind === 'drawing') {
       this.state = newDrawingState(s.tool);
@@ -178,6 +204,112 @@ export class DrawingController {
   dispose(): void {
     this.options = null;
     this.cache = null;
+    this.history.clear();
+  }
+
+  // --- user commands (toolbar, context controls, keyboard) ---------------------------------------
+
+  /**
+   * Edits a drawing's style, visibility or lock state (allowed on locked drawings, so they can be
+   * restyled and unlocked). Hiding the selected drawing deselects it. Returns false for an unknown
+   * id, an invalid patch, a patch that changes nothing, or while a gesture is in progress.
+   */
+  edit(id: string, patch: DrawingPatch): boolean {
+    if (!this.isQuiet()) return false;
+    const drawing = this.find(id);
+    if (!drawing) return false;
+    const next = applyDrawingPatch(drawing, patch);
+    if (!next || next === drawing) return false;
+    const selectAfter = !next.visible && this.selectedId === id ? null : this.selectedId;
+    this.commit(
+      this.drawings.map((d) => (d.id === id ? next : d)),
+      { kind: 'update', id },
+      selectAfter,
+    );
+    return true;
+  }
+
+  /**
+   * Duplicates a drawing (default: the selected one) next to it (see duplicateAnchors), on top of
+   * the z-order, visible and unlocked, and selects it. Returns the new id, or null.
+   */
+  duplicate(id: string | null, coords: ChartCoordinates | null): string | null {
+    if (!this.isQuiet() || !coords) return null;
+    const original = this.find(id ?? this.selectedId);
+    if (!original) return null;
+    const newId = this.options?.createId?.() ?? defaultDrawingId();
+    const copy: Drawing = {
+      ...original,
+      id: newId,
+      anchors: duplicateAnchors(original, coords),
+      visible: true,
+      locked: false,
+    };
+    this.commit([...this.drawings, copy], { kind: 'add', id: newId }, newId);
+    return newId;
+  }
+
+  /** Deletes a drawing (default: the selected one). Locked drawings are refused. */
+  remove(id: string | null = null): boolean {
+    if (!this.isQuiet()) return false;
+    const drawing = this.find(id ?? this.selectedId);
+    if (!drawing || drawing.locked) return false;
+    this.hover = null;
+    const selectAfter = this.selectedId === drawing.id ? null : this.selectedId;
+    this.commit(
+      this.drawings.filter((d) => d.id !== drawing.id),
+      { kind: 'remove', id: drawing.id },
+      selectAfter,
+    );
+    return true;
+  }
+
+  undo(): boolean {
+    if (!this.isQuiet()) return false;
+    const entry = this.history.undo();
+    if (!entry) return false;
+    this.restore(entry.before, entry.selectedBefore, {
+      ...inverseChange(entry.change),
+      source: 'undo',
+    });
+    return true;
+  }
+
+  redo(): boolean {
+    if (!this.isQuiet()) return false;
+    const entry = this.history.redo();
+    if (!entry) return false;
+    this.restore(entry.after, entry.selectedAfter, { ...entry.change, source: 'redo' });
+    return true;
+  }
+
+  /** A keyboard command (drawings/keyboard.ts). Returns whether it did something. */
+  command(cmd: DrawingCommand, coords: ChartCoordinates | null): boolean {
+    const s = this.state;
+    switch (cmd) {
+      case 'cancel':
+        if (s.kind === 'dragging-drawing' || s.kind === 'dragging-handle') {
+          this.cancelInteraction();
+          return true;
+        }
+        if (s.kind === 'drawing') {
+          this.setTool('cursor');
+          return true;
+        }
+        if (this.selectedId !== null) {
+          this.select(null);
+          return true;
+        }
+        return false;
+      case 'delete':
+        return s.kind === 'idle' && this.remove();
+      case 'undo':
+        return this.undo();
+      case 'redo':
+        return this.redo();
+      case 'duplicate':
+        return s.kind === 'idle' && this.duplicate(null, coords) !== null;
+    }
   }
 
   // --- rendering --------------------------------------------------------------------------------
@@ -215,7 +347,7 @@ export class DrawingController {
     if (s.kind === 'dragging-drawing' || s.kind === 'dragging-handle') return 'grabbing';
     if (s.kind === 'drawing') return 'crosshair';
     if (this.hover?.kind === 'handle') return 'move';
-    if (this.hover?.kind === 'body') return 'pointer';
+    if (this.hover?.kind === 'body') return this.find(this.hover.id)?.locked ? 'pointer' : 'grab';
     return null;
   }
 
@@ -227,11 +359,12 @@ export class DrawingController {
     return s.kind === 'drawing' && s.press?.pointerId === pointerId;
   }
 
-  // --- input ------------------------------------------------------------------------------------
+  // --- pointer input ----------------------------------------------------------------------------
 
   /**
-   * Primary-button press inside the plot. Returns true when drawings consumed it; false means
-   * empty space in cursor mode (the chart pans; a selection is cleared).
+   * Primary-button press inside the plot. Returns true when drawings consumed it. False means the
+   * chart handles it (pan): empty space (a selection is cleared) or a locked drawing (selected,
+   * and the chart can still be panned by dragging across it).
    */
   pointerDown(p: DrawingPointer, coords: ChartCoordinates | null): boolean {
     if (p.button !== 0) return false;
@@ -265,35 +398,32 @@ export class DrawingController {
       }
       return false;
     }
-    const drawing = this.drawings.find((d) => d.id === hit.id);
+    const drawing = this.find(hit.id);
     if (!drawing) return false;
     this.setSelected(hit.id);
-    if (!drawing.locked) {
-      if (hit.kind === 'handle') {
-        this.state = {
-          kind: 'dragging-handle',
-          id: hit.id,
-          pointerId: p.pointerId,
-          original: drawing,
-          handle: hit.handle,
-          moved: false,
-        };
-      } else {
-        const startTime = coords.xToTime(p.x);
-        if (startTime !== null)
-          this.state = {
-            kind: 'dragging-drawing',
-            id: hit.id,
-            pointerId: p.pointerId,
-            original: drawing,
-            startTime,
-            startPrice: coords.yToPrice(p.y),
-            moved: false,
-          };
-      }
-    }
     this.hover = hit;
     this.invalidate();
+    if (drawing.locked) return false;
+    const base = {
+      id: hit.id,
+      pointerId: p.pointerId,
+      original: drawing,
+      startDrawings: this.drawings,
+      press: { x: p.x, y: p.y },
+      moved: false,
+    };
+    if (hit.kind === 'handle') {
+      this.state = { ...base, kind: 'dragging-handle', handle: hit.handle };
+    } else {
+      const startTime = coords.xToTime(p.x);
+      if (startTime !== null)
+        this.state = {
+          ...base,
+          kind: 'dragging-drawing',
+          startTime,
+          startPrice: coords.yToPrice(p.y),
+        };
+    }
     return true;
   }
 
@@ -311,6 +441,8 @@ export class DrawingController {
     if (s.kind === 'dragging-handle' || s.kind === 'dragging-drawing') {
       if (s.pointerId !== p.pointerId) return false;
       if (!coords) return true;
+      if (!s.moved && Math.hypot(p.x - s.press.x, p.y - s.press.y) <= DRAG_START_THRESHOLD)
+        return true;
       let next: Drawing | null = null;
       if (s.kind === 'dragging-handle') {
         const anchor = anchorAt(p, coords);
@@ -324,7 +456,7 @@ export class DrawingController {
         }
       }
       if (next) {
-        this.replace(next);
+        this.drawings = s.startDrawings.map((d) => (d.id === next.id ? next : d));
         this.state = { ...s, moved: true };
         this.invalidate();
       }
@@ -356,12 +488,13 @@ export class DrawingController {
     if (s.kind !== 'dragging-drawing' && s.kind !== 'dragging-handle') return false;
     if (s.pointerId !== p.pointerId) return false;
     this.state = IDLE;
-    if (cancelled) {
-      this.replace(s.original);
-    } else if (s.moved) {
-      this.options?.onDrawingsChange?.(this.drawings, { kind: 'update', id: s.id });
+    const after = this.drawings;
+    this.drawings = s.startDrawings;
+    if (!cancelled && s.moved && after !== s.startDrawings) {
+      this.commit(after, { kind: 'update', id: s.id }, this.selectedId);
+    } else {
+      this.invalidate(); // cancelled or a plain click: exactly the set before the press
     }
-    this.invalidate();
     return true;
   }
 
@@ -372,51 +505,50 @@ export class DrawingController {
     }
   }
 
-  /** Escape cancels / deselects; Delete or Backspace removes the selected drawing. */
-  keyDown(key: string): boolean {
-    const s = this.state;
-    if (key === 'Escape') {
-      if (s.kind === 'dragging-drawing' || s.kind === 'dragging-handle') {
-        this.cancelInteraction();
-        return true;
-      }
-      if (s.kind === 'drawing') {
-        this.setTool('cursor');
-        return true;
-      }
-      if (this.selectedId !== null) {
-        this.select(null);
-        return true;
-      }
-      return false;
-    }
-    if ((key === 'Delete' || key === 'Backspace') && s.kind === 'idle') {
-      const id = this.selectedId;
-      const drawing = id === null ? undefined : this.drawings.find((d) => d.id === id);
-      if (!drawing || drawing.locked) return false;
-      this.drawings = this.drawings.filter((d) => d.id !== drawing.id);
-      this.hover = null;
-      this.options?.onDrawingsChange?.(this.drawings, { kind: 'remove', id: drawing.id });
-      this.setSelected(null);
-      this.invalidate();
-      return true;
-    }
-    return false;
+  // ---------------------------------------------------------------------------------------------
+
+  /** The single path for user mutations: history entry, change event, selection, repaint. */
+  private commit(
+    next: readonly Drawing[],
+    change: Pick<DrawingChange, 'kind' | 'id'>,
+    selectAfter: string | null,
+  ): void {
+    const entry: DrawingHistoryEntry = {
+      before: this.drawings,
+      after: next,
+      selectedBefore: this.selectedId,
+      selectedAfter: selectAfter,
+      change,
+    };
+    this.drawings = next;
+    this.history.push(entry);
+    this.options?.onDrawingsChange?.(next, { ...change, source: 'edit' });
+    this.setSelected(selectAfter);
+    this.reportHistory();
+    this.invalidate();
   }
 
-  // ---------------------------------------------------------------------------------------------
+  private restore(
+    drawings: readonly Drawing[],
+    selected: string | null,
+    change: DrawingChange,
+  ): void {
+    this.drawings = drawings;
+    this.hover = null;
+    this.options?.onDrawingsChange?.(drawings, change);
+    this.setSelected(selected !== null && this.isSelectable(selected) ? selected : null);
+    this.reportHistory();
+    this.invalidate();
+  }
 
   private finish(type: DrawingType, anchors: readonly DrawingAnchor[]): void {
     const id = this.options?.createId?.() ?? defaultDrawingId();
     const drawing = this.newDrawing(id, type, anchors);
-    this.drawings = [...this.drawings, drawing];
-    this.options?.onDrawingsChange?.(this.drawings, { kind: 'add', id });
-    this.setSelected(id);
     // One drawing per activation (TradingView-like): back to the cursor, new drawing selected.
     this.state = IDLE;
+    this.commit([...this.drawings, drawing], { kind: 'add', id }, id);
     this.tool = 'cursor';
     this.options?.onToolChange?.('cursor');
-    this.invalidate();
   }
 
   private newDrawing(id: string, type: DrawingType, anchors: readonly DrawingAnchor[]): Drawing {
@@ -428,14 +560,32 @@ export class DrawingController {
     return { id, type, anchors, style, visible: true, locked: false };
   }
 
-  private replace(drawing: Drawing): void {
-    this.drawings = this.drawings.map((d) => (d.id === drawing.id ? drawing : d));
+  /** No gesture in progress (an active tool without placed anchors counts as quiet). */
+  private isQuiet(): boolean {
+    const s = this.state;
+    return s.kind === 'idle' || (s.kind === 'drawing' && s.anchors.length === 0);
+  }
+
+  private find(id: string | null): Drawing | undefined {
+    return id === null ? undefined : this.drawings.find((d) => d.id === id);
+  }
+
+  private isSelectable(id: string): boolean {
+    return this.find(id)?.visible === true;
   }
 
   private setSelected(id: string | null): void {
     if (id === this.selectedId) return;
     this.selectedId = id;
     this.options?.onSelectionChange?.(id);
+  }
+
+  private reportHistory(): void {
+    const state = this.history.state();
+    const key = `${state.canUndo}|${state.canRedo}`;
+    if (key === this.reportedHistory) return;
+    this.reportedHistory = key;
+    this.options?.onHistoryChange?.(state);
   }
 
   private invalidate(): void {

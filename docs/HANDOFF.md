@@ -1,226 +1,162 @@
 # Fume Current Handoff
 
-## Current status
+Operational state for a fresh session. Permanent rules: [CLAUDE.md](../CLAUDE.md). Design:
+[ARCHITECTURE.md](../ARCHITECTURE.md) and the docs linked below. The repository (code, Git history,
+this file) is the source of truth; do not reconstruct decisions from memory.
 
-**Current stage: Stage 7 — Drawing foundation** (branch `stage-7/drawing-foundation`)
+## Current status (2026-10-01)
 
-Status: **IMPLEMENTED (uncommitted, local only), AWAITING OWNER REVIEW.** Drawing system inside
-the chart engine ([drawings.md](drawings.md)): third canvas layer, versioned serializable model
-(time + price anchors), public `ChartCoordinates`, framework-free tool state machine,
-hit-testing; trend line (complete), horizontal line, rectangle. Core time scale gained
-`timeToSlotCoordinate` / `slotCoordinateToTime`. `@fume/react` passes drawings through;
-`apps/web` has a reference toolbar (left rail) with in-memory per-instrument drawings.
+- **Branch:** `stage-8/drawing-ux` (local only), created from `main`.
+- **`main`:** `a4e3926542cffc4fe1f11aae26fd5ed96298857d` (Stage 7 squash merge, PR #7).
+- **Stage 8 — Drawing UX: IMPLEMENTED (uncommitted, local only), AWAITING OWNER REVIEW.** Style
+  editing, lock, visibility, duplicate, undo/redo, keyboard shortcuts, selection polish; contextual
+  bar, undo/redo and drawing list in the reference app ([drawings.md](drawings.md) "Drawing UX").
+- Everything runs locally (Vite + `wrangler dev`); nothing is deployed.
 
-Stage 6 (`@fume/react`, squash-merged to `main` as `0a6831c`) is complete.
+## Completed stages (all squash-merged into `main`)
 
-Stage 5 (squash-merged to `main` as `3597927`) summary follows.
+| Stage | Content                                                                                        | `main` commit |
+| ----- | ---------------------------------------------------------------------------------------------- | ------------- |
+| 0     | Architecture, contracts, repository foundation                                                 | `c148b51`     |
+| 1     | Custom Canvas 2D chart engine (`@fume/chart`)                                                  | `dab940f`     |
+| 2     | Interactions: zoom/pan, crosshair + OHLC legend, auto/manual price scaling                     | `567aef4`     |
+| 3     | Replay provider, live aggregation/reconciliation, older-history paging, Go to Latest           | `61b27b1`     |
+| 4     | Cloudflare Worker + Alpaca IEX historical equities, canonical aggregation, `/api/v1`           | `59899da`     |
+| 5     | Massive delayed futures streaming, feed-scoped Durable Object hubs, `@fume/datafeed`           | `3597927`     |
+| 6     | `@fume/react` (`<FumeChartView />`), React `^18.2.0 \|\| ^19.0.0` peer; `apps/web` migrated    | `0a6831c`     |
+| 7     | Drawing foundation: drawing layer, model, coordinates, tool state machine, three drawing tools | `a4e3926`     |
 
-**Stage 5 implementation (2026-09-30, owner instruction "proceed with building the platform"; licensing is
-handled separately before public launch and does not shape the architecture):**
+**Roadmap numbering:** [roadmap.md](roadmap.md) still lists its original plan (Stage 6 paper
+trading, 7 trading on the chart, 8 recovery/hardening, 9 production deploy, …). Since Stage 6 the
+owner directs the stages; those roadmap items are future work and get renumbered when approved.
+Follow this file for the current stage.
 
-- Provider-neutral routing: `apps/worker/src/registry.ts` (equities/ETFs -> Alpaca IEX, futures ->
-  Massive Futures Starter), futures ids `fut:<ROOT>:<YYYY-MM>`, `/instruments/resolve?assetClass=future`.
-- Massive REST adapter (`providers/massive/`): root -> recommended contract from reference data +
-  delayed snapshot volume, explicit contract codes, 1-minute bars (cursor paging), schedules ->
-  sessions (de-duplicated; weekly Globex fallback outside coverage).
-- Massive delayed stream adapter (`A.`/`AM.` aggregates, numeric strings normalized, bounded
-  reconnect, `max_connections`/1008 -> `connection_conflict` hold) behind the core
-  `StreamingMarketDataProvider` port.
-- Feed-scoped Durable Object hub (`src/hub/`, `FeedHubObject`, one instance per stream key):
-  subscription union, fan-out, 60 s idle grace, REST reconciliation after reconnect, persisted
-  conflict hold, hibernatable sockets + attachments for reconstruction; `/api/v1/stream?key=`.
-- Core: `1s` bar events folded into the provisional minute; the provider minute is authoritative.
-- Web: futures roots in the selector (ES NQ YM GC SI CL, with friendly labels; DIA added to
-  Stocks & ETFs), contract chip (e.g. `NQZ6 · Dec 2026`),
-  "CME futures · Delayed ~10m" label from feed metadata, stream client + live handoff/resync.
-- Validated locally against the real delayed feed (wrangler dev, Durable Object local; nothing
-  deployed). Alpaca equities unchanged and history-only.
+## Current product
 
-**CURRENT PROVIDER DIRECTION (owner, 2026-09-30):**
+**Instruments** (`apps/web` selector; replay mode offers SPY, QQQ, AAPL, NVDA, TSLA):
 
-- **US equities / ETFs: Alpaca** (Stage 4 implementation unchanged; Massive Stocks not needed).
-- **Initial futures: Massive Futures Starter** ($29/month, already owned) for **GC, SI, CL, NQ,
-  YM**; data may be ~10 minutes delayed; real-time and trade-level futures are not required
-  initially. Intended provider, **pending Massive's written approval of the private Cloudflare
-  backend use**.
-- **Databento:** deferred as a researched fallback, not selected.
-- Reason: Alpaca already works and needs no extra stock-data subscription; Massive Starter was
-  locally proven sufficient for the delayed futures chart; removing a working provider only to
-  reduce vendors has no architectural benefit. Fume stays provider-neutral (no provider-specific
-  chart logic in the browser; ARCHITECTURE.md names no permanent provider).
-- **Approved conceptual futures model** (not implemented): Massive REST 1m aggregates → canonical
-  Fume 1m history; delayed WebSocket 1 s aggregates → provisional current minute; Massive 1m
-  aggregate → authoritative final/reconciled minute; Fume 1m → 5m / 15m / 1h / 4h / 1d. Reconnect:
-  reconnect → authenticate → resubscribe → REST 1m overlap → replace/reconcile recent bars → resume
-  1 s aggregates. Massive aggregate bars are authoritative for initial futures.
-- **Connection limit (observed):** all five futures fit on one WebSocket; a second connection with
-  the same key displaced the older one (`max_connections`, close 1008). Permanent design: one
-  centralized Massive provider/feed hub; no browser connections to Massive; dev processes must not
-  compete with a deployed hub; on 1008 back off and surface the conflict, never a reconnect fight.
-- **Cloud deployment of Massive data: BLOCKED PENDING WRITTEN MASSIVE CONFIRMATION.** Local
-  capability testing is complete (spike `apps/worker/spikes/massive-futures-starter/`,
-  NON-PRODUCTION). Details:
-  [research.md](research.md#product-direction-update--massive-futures-starter-capability-spike-2026-09-30-intended-futures-provider-cloud-blocked-pending-massive-licensing).
-- No permanent futures implementation exists.
+| Group         | Symbols                         | Source                                                                        |
+| ------------- | ------------------------------- | ----------------------------------------------------------------------------- |
+| Stocks & ETFs | SPY, QQQ, DIA, AAPL, NVDA, TSLA | Alpaca IEX, history only (raw adjustment), RTH                                |
+| Futures       | ES, NQ, YM, GC, SI, CL          | Massive Futures Starter, ~10 min delayed, live (delayed) stream, full session |
 
-- The GO approves the DO hub **primitive** only. Preferred permanent topology after the futures
-  checkpoint: **provider/feed-scoped DO hubs** (one hub per provider feed); not implemented.
-- Required permanent-design constraints (disposable in-memory state, expected reconstruction,
-  resync + reconciliation after every reconnect, official bars authoritative, ~60 s idle close,
-  406 = bounded backoff, S4 shortfalls unresolved): ARCHITECTURE.md §6.
-- The temporary Cloudflare Worker `fume-s3-spike` and its secrets were deleted after S3.
+Futures roots resolve to a specific contract at runtime (e.g. `NQZ6 · Dec 2026`); contract months
+are never hard-coded.
 
-- Current branch: `stage-5/realtime-preview` (local only until the owner approves a push)
-- Base / `main`: `59899dacfb2b52b39db8da397fe391dd2f170909`
-- Stage 4: **MERGED via PR #4**; main squash commit `59899dacfb2b52b39db8da397fe391dd2f170909`.
-- Stage 4 historical Alpaca functionality is now the **frozen baseline**.
+**Timeframes:** 1D | 4H | 1H | 15m | 5m | 1m (session-aligned buckets; CLAUDE.md).
 
-## Stage 5 scope (from [roadmap.md](roadmap.md); roadmap is authoritative)
+**Chart:** custom Canvas renderer (three layers: candles, drawings, crosshair overlay), zoom/pan,
+crosshair + OHLC legend, auto/manual vertical scaling, Go to Latest, historical paging,
+session-aware compressed time, live (delayed futures) and replay data, shared stream multiplexing
+(one socket per hub for any number of charts), embeddable `<FumeChartView />`.
 
-- Alpaca real-time market-data stream adapter
-- backend stream hub
-- `/api/v1/stream`
-- real live candles
-- preview deployment behind Cloudflare Access
+**Drawings** ([drawings.md](drawings.md)): dedicated drawing canvas; anchors in market coordinates
+(time + price); versioned schema (`fume.drawings` v1); hit-testing; selection; draggable handles;
+whole-drawing dragging; Delete/Backspace; Escape cancels; Trend Line, Horizontal Line, Rectangle;
+left drawing toolbar (rail) in the reference app. Stage 8: style editing (color, width, line
+style, rectangle fill + opacity), lock, show/hide, duplicate, undo/redo (engine history),
+keyboard shortcuts, contextual style bar and drawing list. Drawings live in memory per instrument
+in `apps/web` (lost on reload).
 
-Stage 5 must **not** jump straight into the full implementation. Required gates first:
-
-- **S2 — connection limit:** does Alpaca's one-connection limit apply per API key or per account,
-  and what exactly happens when a second IEX stream is opened (error 406? old socket dropped?).
-- **S3 — Durable Object gate:** outbound WebSocket from a DO, text/binary frames, auth timing,
-  disconnect/reconnect, lifecycle/eviction and duration cost. The roadmap requires a **go/no-go**
-  before committing to the StreamHub architecture (ARCHITECTURE.md §6).
-
-The eventual implementation follows **one** of: **A.** Durable Object StreamHub, or **B.** the
-approved single-tab fallback, decided by the S3 result.
-
-**Stage 5 sequence (owner decision 2026-09-30, roadmap is authoritative):** A. S2 ✅ → B. S3 ✅ →
-C. owner DO vs single-tab decision ✅ (GO: DO) → D. **futures-provider + multi-provider architecture
-checkpoint** → E. owner approval → F. permanent streaming implementation → G. S4 → H. S7.
-Reason: Fume will support multiple market-data providers: Alpaca for equities/ETFs and, later, a
-futures provider for **GC, SI, CL, NQ, YM** (actual futures, not ETF proxies such as
-GLD/SLV/USO/QQQ/DIA). Databento is preferred pending licensing confirmation (Massive fallback);
-no provider is locked in and nothing futures-related is implemented. See roadmap "Multi-provider / futures direction" and ARCHITECTURE §6.1. Later in Stage 5: **S4** (provisional
-IEX trade-built minute vs the official minute bar) and **S7** (Cloudflare Access including
-WebSocket upgrades, JWT verification in the Worker).
-
-## Stage 5 boundaries
-
-- Stage 4 history must keep working (no regression); Replay remains available.
-- The browser still never connects directly to Alpaca; credentials stay Worker/backend-only.
-- No trading, orders, positions or P&L in Stage 5; no Stage 6 work.
-- No permanent Durable Object architecture until the S3 go/no-go. Do not assume the DO path is
-  approved merely because it appears in the roadmap.
-- The streaming layer must stay provider-neutral: no "one StreamHub = one Alpaca socket" design;
-  provider specifics stay inside provider adapters.
-- No futures-provider code, no GC/SI/CL/NQ/YM in the UI, no fake futures data until the checkpoint
-  is approved.
-
-## Completed stages
-
-- **Stage 0:** architecture, contracts and repository foundation.
-- **Stage 1:** custom Canvas 2D chart engine.
-- **Stage 2:** interactions: ticker/timeframe controls, horizontal zoom/pan, crosshair, manual price
-  scaling.
-- **Stage 3:** `ReplayMarketDataProvider`, live aggregation/reconciliation, incremental updates,
-  older-history loading, 2D chart navigation, go-to-latest (→|).
-- **Stage 4:** local Cloudflare Worker backend plus real Alpaca IEX historical market data:
-  instruments, calendar sessions, Fume canonical aggregation and HTTP paging (`?source=api`).
-- **Stage 5:** Massive delayed futures streaming (feed-scoped Durable Object hubs), ES/DIA and
-  selector labels, `@fume/datafeed` (headless `ChartSession` + `DataFeed`), two-chart proof.
-- **Stage 6:** `@fume/react` (`<FumeChartView />`), React 18/19 peer range; `apps/web` migrated.
-
-## Stage 4 verified facts (spike S1, `pnpm s1`)
-
-- Provider: Alpaca · Feed: IEX · Adjustment: raw
-- S1 SPY completed regular session: **2026-09-29**
-- Observed: 1Min = **390** bars, 5Min = **78** bars, 15Min = **26** bars; **no IEX gaps** during
-  that tested session.
-- Verified native intervals for this tested data: **`[1, 5, 15]`**
-- Canonical equality (built from 1Min vs from native bars) passed: 5m, 15m, 1h, 4h, 1d.
-- 1h: 7 canonical candles on a full session; the final 15:30–16:00 candle is short.
-- 4h: 2 canonical candles on a full session.
-- Early-close validation: **2025-11-28** (13:00 close; clipped buckets correct).
-- **Scope caveat:** verified on the tested SPY sessions only. Do not describe these as universal
-  guarantees beyond that evidence. Details: [research.md](research.md#spike-s1-results-2026-09-29).
-
-## Current application modes
-
-| Mode                 | URL                                  | Label                     |
-| -------------------- | ------------------------------------ | ------------------------- |
-| Default (replay)     | http://localhost:5173/?source=replay | Replay · not live         |
-| Historical real data | http://localhost:5173/?source=api    | Alpaca · IEX · historical |
-| Worker (local only)  | http://127.0.0.1:8787                | —                         |
-
-Any `source` other than `api` (or none) is replay. Stage 4 is **historical HTTP data only**; there is
-**no live Alpaca WebSocket integration yet**.
-
-## Current local commands
+## Architecture in one screen
 
 ```
-pnpm dev            # web, replay mode
-pnpm dev:worker     # local Worker (needs apps/worker/.dev.vars)
-pnpm dev:api        # web + Worker, then open ?source=api
-pnpm s1             # S1 real-data verification (writes sanitized fixtures)
-pnpm test
-pnpm typecheck
-pnpm format:check
-pnpm build
-pnpm scan:secrets
-pnpm scan:bundle    # after pnpm build
+browser: apps/web ── @fume/react ── @fume/chart (Canvas)        @fume/datafeed ── /api/v1 (relative)
+                                        └ type-only ─ @fume/core ─┘   (FumeApiDataFeed | ReplayDataFeed)
+Worker (apps/worker): /api/v1 routes ── provider registry
+   equities → Alpaca IEX REST (history)          futures → Massive REST + delayed WebSocket
+   /api/v1/stream → FeedHubObject (Durable Object, one per feed key): ONE upstream per feed/account,
+   subscription union, fan-out, reconciliation after reconnect, conflict hold on max_connections
 ```
+
+- `@fume/core`: domain, sessions, session-aware time scale, canonical aggregation (higher
+  timeframes built by Fume from canonical 1m), live aggregator.
+- `@fume/datafeed`: headless `ChartSession` + `DataFeed` contract; one multiplexed stream
+  connection per hub key (30 s idle close).
+- `@fume/react`: thin binding; React is a peer dependency. Docs: [embedding.md](embedding.md).
+- Provider details: ARCHITECTURE.md §6.1, [market-data.md](market-data.md),
+  [research.md](research.md).
+
+## Rules that matter most (full list: CLAUDE.md)
+
+- Drawings never persist raw x/y pixels or bar indices; anchors are real timestamps + prices.
+- Drawing logic stays in the engine (`packages/chart/src/drawings/`), never in React; the React
+  wrapper stays thin (pass-through props/handle only).
+- The host owns drawing persistence; the chart never saves.
+- The browser never receives provider credentials and never connects to a provider.
+- No TradingView, no Lightweight Charts, no third-party chart renderer.
+- Never start a second Massive upstream connection (one Worker/hub process at a time; a second
+  connection with the same key displaces the first: `max_connections`, close 1008).
+- Do not hard-code futures contract months.
+- Higher timeframes are built by Fume from canonical 1m; never taken from provider 1h/1d bars.
+- Futures session handling stays session-aware (full Globex session with the daily break).
+- Massive-derived data is not exposed to external users; cloud deployment of Massive data is
+  blocked until Massive confirms the private-backend use in writing. Paper trading only, later.
+
+## Local run
+
+```
+pnpm dev            # web only, replay mode (http://localhost:5173/)
+pnpm dev:worker     # local Worker on 127.0.0.1:8787 (needs apps/worker/.dev.vars)
+pnpm dev:api        # web + Worker; open http://localhost:5173/?source=api
+                    # futures: ?source=api&symbol=NQ&asset=future&tf=5m
+                    # two-chart proof: ?source=api&proof=two-charts
+```
+
+- Only one Worker process may run (it holds the Massive connection). The Worker only accepts the
+  origin `http://localhost:5173`.
+- Dev-only QA handles in the browser console: `__fumeFeed` (e.g. `streamDiagnostics()`),
+  `__fumeView.current` (the `FumeChartViewHandle`: `getState()`, `getDrawings()`,
+  `setDrawingTool()`); on the proof page `__fumeView1` / `__fumeView2`.
+- Windows note: a long-running Vite dev server has occasionally stopped noticing file changes
+  (stale module served). Touch the file or restart Vite before debugging "impossible" behavior.
+
+## Quality gates (all must pass before a commit)
+
+`pnpm test` · `pnpm typecheck` · `pnpm format:check` · `pnpm scan:secrets` · `pnpm build` ·
+`pnpm scan:bundle`. Stage 8 (uncommitted): **760 tests in 52 files pass**; all gates green.
 
 ## Security state
 
-- Real credentials live only in `apps/worker/.dev.vars`; the file is ignored and untracked.
-- Never read the credential values back into chat (or any output).
-- The frontend production bundle contains no Alpaca hosts, auth-header names or credentials.
-- Fixtures contain response bodies only.
-- No Cloudflare production deployment exists yet; no production authentication exists yet (the
-  Worker accepts only `FUME_ENV=local` on a loopback host).
+- Credentials (Alpaca key/secret, `MASSIVE_API_KEY`) exist only in the ignored
+  `apps/worker/.dev.vars`. Never print, read back, log or commit them; scans compare values
+  without printing.
+- The Worker accepts only local loopback requests (`FUME_ENV=local`); no production auth or
+  deployment exists.
 
-## Current test state (at Stage 4 approval)
+## Known limitations
 
-- 530 tests pass across 32 files; 132 Worker tests pass.
-- Typecheck, format and build: pass.
-- Secret scan: 0 findings. Bundle scan: 0 findings.
-- Boundary / chart-library guards: pass.
+- No drawing persistence across reload; no multi-select; no magnet/snapping mode (time snaps to
+  bars, price is free); no touch-specific drawing UX; undo history is per chart and is cleared on a
+  symbol switch.
+- Drawings whose anchors lie outside the loaded calendar are hidden until that history is paged in.
+- No crosshair/visible-range events on the engine API.
+- No indicators; no brokerage/order execution; no trading-platform integration.
+- Equities are history-only (no live Alpaca stream); `adjustment=raw` shows splits as price cliffs.
+- Packages export TypeScript source (no compiled builds); no cross-origin backend auth.
 
-## Important known limitations
+## Current milestone: Stage 8 — Drawing UX (implemented, awaiting review)
 
-- Real historical mode does not tick live; WebSocket market data is Stage 5.
-- In-progress real candle behavior has automated coverage but was not verified during an open
-  market.
-- Alpaca IEX returned no bars for 2025-03-10; Fume correctly leaves the session empty.
-- `adjustment=raw`: splits can appear as historical price cliffs.
-- Alpaca US equities normalize to `equity`; Fume does not guess the ETF subtype from ticker/name.
-- Worker tests use Node + injected `fetch`, not the Cloudflare Workers test pool.
-- Everything is still local-only.
+Polish of the existing drawing system. Delivered scope:
 
-## Exact next action
+- Styling controls: line color, line width, solid/dashed/dotted, rectangle fill/opacity.
+- Lock/unlock, show/hide, duplicate.
+- Undo/redo.
+- Better selection ergonomics; deletion controls; drawing object management where appropriate.
+- Keyboard shortcuts; clearer toolbar/tool-state feedback.
 
-**STOP: owner review of the uncommitted Stage 7 work** (branch `stage-7/drawing-foundation`, not
-committed or pushed): drawing foundation (docs/drawings.md), reference toolbar. After approval:
-commit, push, PR, owner squash-merge; the next stage starts only on explicit approval.
+Out of scope for Stage 8: indicators, Fibonacci (unless explicitly approved later), AI
+annotations, order/brokerage execution, user/database persistence, trading-platform integration.
 
-Local run: `pnpm dev:api` (Worker + Durable Object hub, needs the keys in
-`apps/worker/.dev.vars`), then `http://localhost:5173/?source=api&symbol=NQ&asset=future&tf=5m`.
-Only one process may hold the Massive connection.
+## Stage workflow reminder
 
-Not started: crosshair/visible-range engine events, further drawing tools (Fibonacci, text,
-rays, channels, measurement), drawing persistence (host-owned), indicators, layout persistence,
-AI annotations, packaging (compiled builds), cross-origin backend auth, trading-platform
-integration.
+Branch per stage → implement → gates → owner visual review → commit/push only when told → PR →
+owner squash-merges → fast-forward `main`, verify the stage content by tree → next branch. Never
+start the next stage, push, open a PR or merge without explicit approval. No `Co-Authored-By`.
 
-## Recovery instructions
+## Fresh-session checklist
 
-A fresh Claude Code session should begin by reading:
-
-1. `CLAUDE.md`
-2. `docs/HANDOFF.md`
-3. `git status`
-4. `git log --oneline -5`
-
-Then read only the additional architecture/docs the immediate task needs. Trust the repository, Git
-history, `CLAUDE.md` and `docs/HANDOFF.md` as the source of truth; do not reconstruct prior
-decisions from assumptions or conversation memory.
+1. Read `CLAUDE.md`, then this file.
+2. `git status`, `git log --oneline -5` (expect `main` at `a4e3926`).
+3. Read only the docs the current task needs (for Stage 8: [drawings.md](drawings.md),
+   [embedding.md](embedding.md), ARCHITECTURE.md §4).

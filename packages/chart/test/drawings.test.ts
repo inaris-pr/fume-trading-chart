@@ -152,7 +152,7 @@ describe('trend line: the vertical slice', () => {
     expect(d.anchors[1]!.price).toBeCloseTo(t.B.price, 6);
     // One add event, the tool returns to the cursor, the new line is selected.
     expect(t.changes).toHaveLength(1);
-    expect(t.changes[0]!.change).toEqual({ kind: 'add', id: 'd1' });
+    expect(t.changes[0]!.change).toEqual({ kind: 'add', id: 'd1', source: 'edit' });
     expect(t.changes[0]!.drawings).toBe(t.chart.getDrawings());
     expect(t.tools).toEqual(['trend-line', 'cursor']);
     expect(t.chart.getDrawingTool()).toBe('cursor');
@@ -238,7 +238,7 @@ describe('trend line: the vertical slice', () => {
     expect(moved.anchors[1]!.time).toBe(target.time);
     expect(moved.anchors[1]!.price).toBeCloseTo(target.price, 6);
     expect(t.changes).toHaveLength(2);
-    expect(t.changes[1]!.change).toEqual({ kind: 'update', id: 'd1' });
+    expect(t.changes[1]!.change).toEqual({ kind: 'update', id: 'd1', source: 'edit' });
     expect(t.chart.getView()).toEqual(view); // the chart did not pan
     expectLineAt(t, moved);
   });
@@ -284,7 +284,7 @@ describe('trend line: the vertical slice', () => {
     t.trendLine();
     expect(t.key('Delete')).toBe(true); // prevented: handled by the chart
     expect(t.chart.getDrawings()).toEqual([]);
-    expect(t.changes.at(-1)!.change).toEqual({ kind: 'remove', id: 'd1' });
+    expect(t.changes.at(-1)!.change).toEqual({ kind: 'remove', id: 'd1', source: 'edit' });
     expect(t.chart.getSelectedDrawingId()).toBeNull();
     expect(t.key('Backspace')).toBe(false); // nothing selected: not handled
 
@@ -491,7 +491,7 @@ describe('layers, events and lifecycle', () => {
     t.flush();
     expect(t.layer.ctx.clears).toBe(1);
     expect(t.layer.ctx.strokes[0]!.width).toBe(2 * PR + PR); // hovered: thicker
-    expect(t.overlay.style.cursor).toBe('pointer');
+    expect(t.overlay.style.cursor).toBe('grab'); // movable body
     expect(t.main.ctx.clears + t.main.ctx.rects.length).toBe(0);
     t.move({ x: 5, y: 5 });
     t.flush();
