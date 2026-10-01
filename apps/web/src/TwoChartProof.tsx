@@ -1,14 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { StreamState, TimeframeId } from '@fume/core';
 import { FumeApiDataFeed, type ChartStatus, type DataFeed } from '@fume/datafeed';
-import { ChartHost } from './ChartHost.tsx';
+import { FumeChartView, type FumeChartViewHandle } from '@fume/react';
 import { feedLabel } from './feed-label.ts';
 import { TIMEFRAME_LABELS } from './timeframes.ts';
 
 /**
- * Embedding proof (`?source=api&proof=two-charts`): two independent charts on one page, NQ 5m and
- * ES 1h, sharing ONE DataFeed and therefore one stream connection to the futures hub. The footer
- * shows the feed's stream diagnostics (connections, sockets created, subscriptions).
+ * Embedding proof (`?source=api&proof=two-charts`): two <FumeChartView /> components on one page,
+ * NQ 5m and ES 1h, sharing ONE DataFeed and therefore one stream connection to the futures hub.
+ * The footer shows the feed's stream diagnostics (connections, sockets created, subscriptions).
  */
 const CHARTS: readonly { symbol: string; timeframe: TimeframeId }[] = [
   { symbol: 'NQ', timeframe: '5m' },
@@ -59,6 +59,10 @@ function ProofPane({
 }) {
   const [status, setStatus] = useState<ChartStatus | null>(null);
   const [stream, setStream] = useState<StreamState | null>(null);
+  const viewRef = useRef<FumeChartViewHandle>(null);
+  useEffect(() => {
+    if (import.meta.env.DEV) Object.assign(window, { [`__fumeView${devName}`]: viewRef });
+  }, [devName]);
   const ready = status?.kind === 'ready' ? status : null;
   return (
     <section className="proof-pane">
@@ -71,14 +75,14 @@ function ProofPane({
         </span>
       </div>
       <div className="chart-area">
-        <ChartHost
+        <FumeChartView
+          ref={viewRef}
           datafeed={datafeed}
           symbol={symbol}
           assetClass="future"
           timeframe={timeframe}
           onStatus={setStatus}
           onStreamState={setStream}
-          devName={devName}
         />
       </div>
     </section>

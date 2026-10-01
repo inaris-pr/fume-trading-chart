@@ -52,9 +52,9 @@ Browser (single user)                          Cloudflare                       
 **Guardrails that keep this small:**
 
 - Dependencies: `react`, `react-dom`, `@vitejs/plugin-react`. No router, no state library, no UI kit, no CSS framework.
-- React never renders the chart. A single `<ChartHost>` component owns a `<div>`, creates `FumeChart` in an effect, forwards props into imperative calls (`setBars`, `setOverlays`, …) and calls `destroy()` on unmount. React re-renders never touch the Canvas.
+- React never renders the chart. `<FumeChartView>` (`@fume/react`, Stage 6) owns a `<div>`, creates `FumeChart` + `ChartSession` in an effect, forwards props into imperative calls and disposes both on unmount. React re-renders never touch the Canvas.
 - Market and trading state live in framework-free stores in `@fume/core` (pure reducers plus a subscribe function). React reads them with `useSyncExternalStore`. The high-frequency trade path goes store → chart directly, bypassing React.
-- A React wrapper for external consumers (`@fume/chart-react`) is extracted from `<ChartHost>` in Stage 10 only if the consuming app is React.
+- The React wrapper for external consumers was extracted in Stage 6 as `@fume/react` (`<FumeChartView />`, docs/embedding.md); `apps/web` consumes it like any other host.
 
 **Alternative rejected:** plain TypeScript for everything. It has fewer dependencies, but it means building our own reactive UI plumbing for the trading panel, and it gives no integration advantage.
 
@@ -68,10 +68,11 @@ fume-trading-chart/
 │  │             state machine and P&L). No DOM, no provider code.
 │  ├─ chart/     @fume/chart: Canvas chart engine (Stage 1). Depends on nothing provider-specific.
 │  ├─ replay/    @fume/replay: deterministic ReplayMarketDataProvider (Stage 3). Offline.
-│  └─ datafeed/  @fume/datafeed: headless ChartSession + DataFeed contract, FumeApiDataFeed
-│                (HTTP + one multiplexed stream per hub), ReplayDataFeed (docs/embedding.md).
+│  ├─ datafeed/  @fume/datafeed: headless ChartSession + DataFeed contract, FumeApiDataFeed
+│  │             (HTTP + one multiplexed stream per hub), ReplayDataFeed (docs/embedding.md).
+│  └─ react/     @fume/react: <FumeChartView /> React binding (React is a peer dependency).
 ├─ apps/
-│  ├─ web/       Vite + React shell: <ChartHost> (FumeChart + ChartSession), app chrome only
+│  ├─ web/       Vite + React shell: <FumeChartView /> from @fume/react, app chrome only
 │  └─ worker/    Cloudflare Worker + StreamHub DO + provider adapters (Stage 4+)
 │     └─ src/providers/{alpaca,replay}/
 ├─ docs/         contracts, designs, research, roadmap
@@ -86,7 +87,8 @@ Only `packages/core` exists after Stage 0. Other folders are created in the stag
 - `chart` → `core`, **type-only** (approved at Stage 1 review, 2026-09-29). `@fume/chart` may `import type` canonical domain contracts from `@fume/core`, such as `Bar`, `TimeScaleMapping` and the formatter/domain types, so the chart consumes the Stage 0 model instead of a second candle model. It must **not** gain a runtime dependency on `@fume/core`: no value imports, and `@fume/core` stays a `devDependency` of the chart package, used only for type resolution. Changing this needs an explicit architecture review. Enforced by `test/boundaries.test.ts`.
 - `replay` → `core` (runtime). A provider adapter; it implements the core `MarketDataProvider` port. Core and chart never import it.
 - `datafeed` → `core`, `replay` (runtime), `chart` (**type-only**). Framework-free and provider-neutral; the only network code is its Fume API client (`fetch`) and stream connection (`WebSocket`), with a configurable base URL, auth hook and socket factory. Core, chart and replay never import it.
-- `web` → `core`, `chart`, `datafeed`, `replay`, only through their public entry points; it makes no network calls itself (the DataFeed does, to Fume's `/api/v1`, never a provider host).
+- `react` → `core`, `chart`, `datafeed` (runtime); `react` is a **peer** dependency. A thin binding: no provider code, no network calls, no candle/session logic of its own. Core, chart, replay and datafeed never import it.
+- `web` → `core`, `chart`, `datafeed`, `react`, `replay`, only through their public entry points; it makes no network calls itself (the DataFeed does, to Fume's `/api/v1`, never a provider host).
 - `worker` → `core` (runtime), `wrangler` (dev only). Provider payload types, hosts and header names live only in `apps/worker/src/providers/<provider>/`.
 - Nothing imports from `worker/src/providers/*` except the Worker's composition root.
 

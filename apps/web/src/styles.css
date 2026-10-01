@@ -138,8 +138,8 @@ body,
   padding: 0;
 }
 
-/* History loading / empty / error notice (api source), centered over the chart. */
-.chart-status {
+/* Loading / empty / error notice (the view's status overlay), centered over the chart. */
+.fume-chart-status {
   position: absolute;
   top: 40%;
   left: 50%;
@@ -155,27 +155,27 @@ body,
   pointer-events: none;
 }
 
-.chart-status-error {
+.fume-chart-status-error {
   color: #f0a8a8;
   border-color: #6b3434;
 }
 
-/* Positioned wrapper: the engine's container plus overlaid host controls. */
-.chart-frame {
+/* <FumeChartView /> root: the engine's container plus its overlaid controls. */
+.fume-chart {
   position: relative;
   width: 100%;
   height: 100%;
 }
 
 /* The engine sizes its canvases to this box; it must be positioned and have a real size. */
-.chart-host {
+.fume-chart-canvas {
   position: absolute;
   inset: 0;
   overflow: hidden;
 }
 
-/* Small "return to realtime" control, shown only while the latest bar is out of view. */
-.go-latest {
+/* Small "go to latest" control, shown only while the latest bar is out of view. */
+.fume-chart-latest {
   position: absolute;
   z-index: 1;
   width: 28px;
@@ -193,11 +193,11 @@ body,
   cursor: pointer;
 }
 
-.go-latest:hover {
+.fume-chart-latest:hover {
   background: #2c3240;
 }
 
-.go-latest:focus-visible {
+.fume-chart-latest:focus-visible {
   outline: 2px solid #5b8def;
   outline-offset: 1px;
 }
