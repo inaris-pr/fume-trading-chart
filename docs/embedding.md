@@ -1,9 +1,8 @@
 # Embedding Fume (React component, headless session + DataFeed)
 
-Status: **Stage 8 "drawing UX"** (2026-10-01, uncommitted): drawing editing commands on top of the
+Status: **Stage 8 "drawing UX"** (merged, `7593b0c`): drawing editing commands on top of the
 Stage 7 drawings, the Stage 6 React embedding and the Stage 5 headless session + DataFeed
-extraction. A React application embeds a Fume chart with `<FumeChartView />`
-(`@fume/react`); any other host drives the framework-free packages directly. The standalone app
+extraction. A React application embeds a Fume chart with `<FumeChartView />` (`@fume/react`); any other host drives the framework-free packages directly. The standalone app
 (`apps/web`) consumes both only through their public entry points, exactly as another application
 would. Drawings: [drawings.md](drawings.md). Not yet: indicators, layouts, packaging (compiled
 builds), cross-origin backend auth.
