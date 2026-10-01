@@ -157,7 +157,7 @@ describe('core, chart, replay and web stay provider-neutral (Stages 2-5)', () =>
       for (const spec of importsOf(read(file))) {
         if (spec.startsWith('.')) continue;
         expect(spec, file).toMatch(
-          /^(@fume\/(core|chart|datafeed|replay)|react|react-dom(\/client)?)$/,
+          /^(@fume\/(core|chart|datafeed|react|replay)|react|react-dom(\/client)?)$/,
         );
       }
     }
@@ -189,6 +189,42 @@ describe('core, chart, replay and web stay provider-neutral (Stages 2-5)', () =>
     expect(code(http)).toMatch(/API_BASE = '\/api\/v1'/);
     // Stream URLs are built from the configured base on the page origin (no host compiled in).
     expect(code(stream)).toMatch(/location\.href/);
+  });
+
+  test('@fume/react: a thin binding over core/chart/datafeed; React is a peer dependency', () => {
+    const dir = join(root, 'packages/react/src');
+    for (const file of sourceFiles(dir)) {
+      const source = code(file);
+      for (const pattern of [...providerSpecific, ...network, /\bwindow\./])
+        expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+      for (const spec of importsOf(read(file))) {
+        expect(spec, file).toMatch(/^(\.\.?\/|@fume\/(core|chart|datafeed)$|react$)/);
+      }
+    }
+    const pkg = JSON.parse(read(join(root, 'packages/react/package.json'))) as Record<
+      string,
+      Record<string, string> | undefined
+    >;
+    expect(Object.keys(pkg.dependencies ?? {}).sort()).toEqual([
+      '@fume/chart',
+      '@fume/core',
+      '@fume/datafeed',
+    ]);
+    expect(Object.keys(pkg.peerDependencies ?? {})).toEqual(['react']);
+    expect(pkg.dependencies?.react).toBeUndefined();
+  });
+
+  test('core, chart, replay and datafeed never import @fume/react (dependency direction)', () => {
+    for (const dir of [
+      'packages/core/src',
+      'packages/chart/src',
+      'packages/replay/src',
+      'packages/datafeed/src',
+    ]) {
+      for (const file of sourceFiles(join(root, dir))) {
+        for (const spec of importsOf(read(file))) expect(spec, file).not.toMatch(/@fume\/react/);
+      }
+    }
   });
 
   test('core, chart and replay never import @fume/datafeed (dependency direction)', () => {

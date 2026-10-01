@@ -32,6 +32,9 @@ importers:
       '@fume/datafeed':
         specifier: workspace:*
         version: link:../../packages/datafeed
+      '@fume/react':
+        specifier: workspace:*
+        version: link:../../packages/react
       '@fume/replay':
         specifier: workspace:*
         version: link:../../packages/replay
@@ -85,6 +88,34 @@ importers:
       '@fume/chart':
         specifier: workspace:*
         version: link:../chart
+
+  packages/react:
+    dependencies:
+      '@fume/chart':
+        specifier: workspace:*
+        version: link:../chart
+      '@fume/core':
+        specifier: workspace:*
+        version: link:../core
+      '@fume/datafeed':
+        specifier: workspace:*
+        version: link:../datafeed
+    devDependencies:
+      '@fume/replay':
+        specifier: workspace:*
+        version: link:../replay
+      '@types/react':
+        specifier: ^19.3.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.3.0
+        version: 19.3.0(@types/react@19.3.0)
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: ^19.3.0
+        version: 19.3.0(react@19.3.0)
 
   packages/replay:
     dependencies:

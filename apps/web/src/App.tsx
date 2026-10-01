@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AssetClass, Instrument, StreamState, TimeframeId } from '@fume/core';
 import { FumeApiDataFeed, ReplayDataFeed, type ChartStatus, type DataFeed } from '@fume/datafeed';
 import { isReplaySymbol, REPLAY_SYMBOLS } from '@fume/replay';
-import { ChartHost } from './ChartHost.tsx';
+import { FumeChartView, type FumeChartViewHandle } from '@fume/react';
 import { feedLabel, feedTitle } from './feed-label.ts';
 import { TwoChartProof } from './TwoChartProof.tsx';
 import { EQUITY_MENU, FUTURES_MENU, FUTURES_ROOTS, optionText } from './symbol-menu.ts';
@@ -64,6 +64,22 @@ function replaySpeed(): number {
  */
 const REPLAY_SESSION_SETTINGS = { clearOnSwitch: false } as const;
 
+/** The app's wording for the chart's loading/empty/error notice (API source). */
+function statusText(status: ChartStatus): string | null {
+  switch (status.kind) {
+    case 'loading':
+      return `Loading ${status.symbol} ${TIMEFRAME_LABELS[status.timeframe]}…`;
+    case 'empty':
+      return status.streaming
+        ? `No delayed data yet for ${status.symbol}`
+        : `No ${TIMEFRAME_LABELS[status.timeframe]} history for ${status.symbol}`;
+    case 'error':
+      return `${status.symbol}: ${status.message} (${status.code})`;
+    default:
+      return null;
+  }
+}
+
 /** One DataFeed per page, shared by every chart on it (one stream connection per hub). */
 function createFeed(mode: SourceMode): DataFeed {
   return mode === 'api' ? new FumeApiDataFeed() : new ReplayDataFeed({ speed: replaySpeed() });
@@ -100,8 +116,9 @@ export function App() {
   const [feed] = useState(() => createFeed(mode));
   // Dev-only QA handle (stripped from production builds). Set in an effect: StrictMode may call
   // the state initializer twice and keep only one of the feeds.
+  const viewRef = useRef<FumeChartViewHandle>(null);
   useEffect(() => {
-    if (import.meta.env.DEV) Object.assign(window, { __fumeFeed: feed });
+    if (import.meta.env.DEV) Object.assign(window, { __fumeFeed: feed, __fumeView: viewRef });
   }, [feed]);
   const [selection, setSelection] = useState(() => initialSelection(mode));
   const [status, setStatus] = useState<ChartStatus | null>(null);
@@ -200,26 +217,17 @@ export function App() {
         )}
       </header>
       <main className="chart-area">
-        <ChartHost
+        <FumeChartView
+          ref={viewRef}
           datafeed={feed}
           {...(mode === 'replay' ? { settings: REPLAY_SESSION_SETTINGS } : {})}
           symbol={selection.symbol}
           assetClass={selection.assetClass}
           timeframe={selection.timeframe}
+          statusOverlay={mode === 'api' ? statusText : false}
           onStatus={setStatus}
           onStreamState={setStream}
         />
-        {mode === 'api' && status && status.kind !== 'ready' && (
-          <div className={`chart-status chart-status-${status.kind}`} role="status">
-            {status.kind === 'loading' &&
-              `Loading ${status.symbol} ${TIMEFRAME_LABELS[status.timeframe]}…`}
-            {status.kind === 'empty' &&
-              (status.streaming
-                ? `No delayed data yet for ${status.symbol}`
-                : `No ${TIMEFRAME_LABELS[status.timeframe]} history for ${status.symbol}`)}
-            {status.kind === 'error' && `${status.symbol}: ${status.message} (${status.code})`}
-          </div>
-        )}
       </main>
     </div>
   );

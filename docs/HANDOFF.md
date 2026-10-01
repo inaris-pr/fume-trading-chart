@@ -2,12 +2,15 @@
 
 ## Current status
 
-**Current stage: Stage 5 — Real-time + preview deploy**
+**Current stage: Stage 6 — React embedding** (branch `stage-6/react-embedding`)
 
-Status: **S2 COMPLETE · S3 COMPLETE · DO hub GO · PERMANENT DELAYED-FUTURES STREAMING IMPLEMENTED
-(uncommitted, local only), AWAITING OWNER REVIEW**
+Status: **IMPLEMENTED (uncommitted, local only), AWAITING OWNER REVIEW.** New `@fume/react`
+package (`<FumeChartView />`, imperative ref, optional go-to-latest + status chrome, headless
+mode); `apps/web` and the two-chart proof render through it; docs/embedding.md documents it.
 
-**Implementation (2026-09-30, owner instruction "proceed with building the platform"; licensing is
+Stage 5 (squash-merged to `main` as `3597927`) summary follows.
+
+**Stage 5 implementation (2026-09-30, owner instruction "proceed with building the platform"; licensing is
 handled separately before public launch and does not shape the architecture):**
 
 - Provider-neutral routing: `apps/worker/src/registry.ts` (equities/ETFs -> Alpaca IEX, futures ->
@@ -118,6 +121,8 @@ WebSocket upgrades, JWT verification in the Worker).
   older-history loading, 2D chart navigation, go-to-latest (→|).
 - **Stage 4:** local Cloudflare Worker backend plus real Alpaca IEX historical market data:
   instruments, calendar sessions, Fume canonical aggregation and HTTP paging (`?source=api`).
+- **Stage 5:** Massive delayed futures streaming (feed-scoped Durable Object hubs), ES/DIA and
+  selector labels, `@fume/datafeed` (headless `ChartSession` + `DataFeed`), two-chart proof.
 
 ## Stage 4 verified facts (spike S1, `pnpm s1`)
 
@@ -188,23 +193,18 @@ pnpm scan:bundle    # after pnpm build
 
 ## Exact next action
 
-**STOP: owner review of the uncommitted work** (not committed or pushed):
-
-1. Stage 5 delayed futures (ES, NQ, YM, GC, SI, CL) + DIA and selector labels (reviewed earlier).
-2. Milestone **headless session + DataFeed extraction** (docs/embedding.md): new
-   `@fume/datafeed` (`ChartSession`, `DataFeed`, `FumeApiDataFeed` with configurable base URL,
-   auth hook and WebSocket factory, one multiplexed stream connection per hub, `ReplayDataFeed`);
-   `apps/web` uses only package entry points; two-chart proof at
-   `?source=api&proof=two-charts` (NQ 5m + ES 1h on one stream connection). Replay behavior is
-   unchanged (whole-session pages, no clearing on switch); the one intentional change is the 30 s
-   idle close of the shared stream socket (docs/embedding.md).
+**STOP: owner review of the uncommitted Stage 6 work** (branch `stage-6/react-embedding`, not
+committed or pushed): `@fume/react` (`<FumeChartView />`), `apps/web` migrated to it (UI
+unchanged), two-chart proof on two `<FumeChartView />`s sharing one `FumeApiDataFeed`,
+docs/embedding.md. After approval: commit, push, PR, owner squash-merge; the next stage starts
+only on explicit approval.
 
 Local run: `pnpm dev:api` (Worker + Durable Object hub, needs the keys in
 `apps/worker/.dev.vars`), then `http://localhost:5173/?source=api&symbol=NQ&asset=future&tf=5m`.
 Only one process may hold the Massive connection.
 
-Not started (per the approved plan): `@fume/react`, theming, overlay/drawings/indicators, packaging
-(compiled builds), cross-origin backend auth, trading-platform integration.
+Not started: crosshair/visible-range engine events, overlay/drawings/indicators, layout
+persistence, packaging (compiled builds), cross-origin backend auth, trading-platform integration.
 
 ## Recovery instructions
 
