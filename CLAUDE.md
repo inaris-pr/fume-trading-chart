@@ -10,23 +10,32 @@ lives in [docs/HANDOFF.md](docs/HANDOFF.md), design detail in the linked docs.
 - Development happens on **Windows** (PowerShell and Git Bash). Node ≥ 22, pnpm 10 workspaces.
 - The **repository root is the source of truth**: code, Git history, this file and
   `docs/HANDOFF.md`. Do not reconstruct decisions from memory or assumptions.
+- **Fresh session:** read this file, then `docs/HANDOFF.md` (current stage, next action), then only
+  the docs the task needs (list below).
 
 ## Architecture rules (enforced by `test/boundaries.test.ts`)
 
 - `packages/core` → nothing (no DOM, no provider code).
 - `packages/chart` → `core` **type-only** (`import type`; core is a devDependency).
 - `packages/replay` → `core`.
+- `packages/datafeed` → `core`, `replay`, `chart` (type-only). Framework-free, provider-neutral; its
+  API client is the only browser network code (relative `/api/v1`).
+- `packages/react` → `core`, `chart`, `datafeed`; React is a **peer** dependency. A thin binding.
+- Lower packages never import higher ones (core/chart/replay ↛ datafeed; nothing ↛ react).
 - `apps/worker` → `core` (runtime); `wrangler` is dev-only.
-- `apps/web` → `core`, `chart`, `replay`, and Fume's own HTTP API client (relative `/api/v1` only).
+- `apps/web` → `core`, `chart`, `datafeed`, `react`, `replay`, through public entry points only.
 - Provider-specific code (payload types, hosts, header names) stays behind adapters in
   `apps/worker/src/providers/<provider>/`; only the Worker composition root imports them.
 - The **browser never connects directly to Alpaca** (or any provider).
 - **Custom Canvas 2D chart only.** No TradingView, no Lightweight Charts, no third-party financial
   chart renderer (lockfile guard).
+- **Drawings** are anchored in market coordinates (time + price), never pixels or bar indices;
+  drawing logic lives in `@fume/chart`, never in React; the host owns persistence.
 
 ## Market data rules
 
-- Default chart session: **US regular trading hours**.
+- Default chart session: **US regular trading hours** for equities/ETFs; futures show their full
+  (Globex) session.
 - Visible timeframe order: **1D | 4H | 1H | 15m | 5m | 1m**.
 - 1H buckets are session-aligned: 09:30–10:30, 10:30–11:30, 11:30–12:30, 12:30–13:30,
   13:30–14:30, 14:30–15:30, 15:30–16:00 (short).
@@ -73,7 +82,10 @@ Local dev: `pnpm dev` (replay), `pnpm dev:worker`, `pnpm dev:api` (web + Worker,
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): system shape, package boundaries, chart engine, data paths
 - [docs/HANDOFF.md](docs/HANDOFF.md): current status, verified facts, next action
-- [docs/roadmap.md](docs/roadmap.md): stages, acceptance criteria, risks and spikes
+- [docs/roadmap.md](docs/roadmap.md): original stage plan (numbering after Stage 5 superseded;
+  see HANDOFF), acceptance criteria, risks and spikes
+- [docs/embedding.md](docs/embedding.md): `@fume/datafeed`, `<FumeChartView />`, embedding rules
+- [docs/drawings.md](docs/drawings.md): drawing model, coordinates, tool state machine, hit-testing
 - [docs/market-data.md](docs/market-data.md): canonical candles, history, live reconciliation
 - [docs/http-api.md](docs/http-api.md): `/api/v1` contract
 - [docs/security.md](docs/security.md): credentials, origin policy, authentication
