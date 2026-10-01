@@ -98,13 +98,14 @@ The engine is one class per chart instance. It is fed data and reports user inte
 
 **The chart engine owns:**
 
-- Canvas setup: device-pixel-ratio scaling, resize via `ResizeObserver`, and layering (a static layer plus an overlay/crosshair layer).
+- Canvas setup: device-pixel-ratio scaling, resize via `ResizeObserver`, and layering (a static candle layer, a drawing layer and an overlay/crosshair layer).
 - The viewport model: slot spacing, right offset, visible logical slot range, price range, auto-scale on or off.
-- Coordinate transforms: slot ↔ x and price ↔ y. These are pure and unit-tested. Time ↔ slot goes through the injected **time-scale mapping** (below).
+- Coordinate transforms: slot ↔ x and price ↔ y. These are pure and unit-tested. Time ↔ slot goes through the injected **time-scale mapping** (below). The public `ChartCoordinates` (time/price ↔ x/y, Stage 7) is what drawings and future overlays use.
 - Rendering bars at their slot positions. Empty slots stay empty, and session separators are drawn where the mapping reports boundaries.
 - Rendering of the grid, candles (body and wick), price scale, time scale, crosshair, OHLC legend, and current-price line and label.
 - Rendering of **generic overlays** the app supplies: `HorizontalLine {price, label, style}` and `Marker {time, price, shape, label}`. Trading visuals are built from these.
 - Interaction: drag-pan, wheel/trackpad zoom around the cursor, price-scale drag to rescale, double-click to reset auto-scale, keyboard basics.
+- Drawings (Stage 7, [docs/drawings.md](docs/drawings.md)): the drawing model, tool state machine, hit-testing and rendering. The host owns persistence.
 - Events: `visibleRangeChanged`, `crosshairMoved`, `needsOlderData` (the left edge is near the first loaded bar).
 - Formatting, which it delegates to injected `formatPrice(p)` and `formatTime(t, granularity)` functions built from `Instrument.priceFormat` and `session.timezone`.
 
@@ -132,6 +133,10 @@ interface TimeScaleMapping {
     fromSlot: number,
     toSlot: number,
   ): readonly { slot: number; kind: 'session' | 'day' | 'week' | 'month' | 'year' }[];
+  /** Stage 7: continuous coordinate for any time (closed time collapses to the next open slot; null outside the calendar). */
+  timeToSlotCoordinate(timeMs: number): number | null;
+  /** Stage 7: inverse; real open-market time for a coordinate, null outside the resolved slots. */
+  slotCoordinateToTime(slot: number): number | null;
 }
 ```
 
@@ -157,14 +162,15 @@ A per-user option to also compress empty in-session slots is **not** in the MVP.
 
 ### 4.2 Interaction layer (Stage 2, approved)
 
-**Two canvases per chart.** Both are owned by `FumeChart`, sized together from the same backing-store computation (DPR-correct), and removed by `destroy()` together with every listener.
+**Three canvases per chart** (two until Stage 7). All are owned by `FumeChart`, sized together from the same backing-store computation (DPR-correct), and removed by `destroy()` together with every listener.
 
-| Layer                   | Draws                                                       | Repainted when                                                     |
-| ----------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------ |
-| Main canvas             | Grid, candles, axes, session separators, last price         | Data, view, price scale or size change                             |
-| Overlay canvas (on top) | Crosshair lines, crosshair price/time readouts, OHLC legend | Every pointer move (no frame rebuild), and after each main repaint |
+| Layer                   | Draws                                                       | Repainted when                                                                     |
+| ----------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Main canvas             | Grid, candles, axes, session separators, last price         | Data, view, price scale or size change                                             |
+| Drawing canvas          | User drawings, hover, handles, unfinished-drawing preview   | After each main repaint, and on drawing/selection/hover changes (no frame rebuild) |
+| Overlay canvas (on top) | Crosshair lines, crosshair price/time readouts, OHLC legend | Every pointer move (no frame rebuild), and after each main repaint                 |
 
-The overlay receives all pointer, wheel and double-click events; the main canvas has `pointer-events: none`.
+The overlay receives all pointer, wheel, double-click and key events (drawings first: docs/drawings.md); the main and drawing canvases have `pointer-events: none`.
 
 **Atomic data replacement.** `chart.setData({ bars, timeScale, formatPrice, formatTime, minPriceStep, barSpacing?, rightOffset? })` replaces the series, its time scale and formatters in one step, then resets the view (latest bars, the given default spacing), the price scale (AUTO) and the crosshair. Symbol and timeframe switches use it, so no slot index, label or price range from the previous dataset can survive. `setBars` / `setOptions` remain for single-property changes.
 
@@ -467,6 +473,7 @@ All recorded 2026-09-29.
 ## 10. Other design documents
 
 - [docs/domain-model.md](docs/domain-model.md): domain types, numeric policy, provider ports
+- [docs/drawings.md](docs/drawings.md): drawing model, coordinate model, tool state machine, hit-testing (Stage 7)
 - [docs/http-api.md](docs/http-api.md), [docs/websocket-api.md](docs/websocket-api.md): contracts
 - [docs/market-data.md](docs/market-data.md): historical/live reconciliation and candle aggregation
 - [docs/trading-state.md](docs/trading-state.md): order/position reconciliation

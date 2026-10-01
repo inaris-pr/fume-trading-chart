@@ -8,3 +8,5 @@ export {
   type FumeChartViewProps,
 } from './FumeChartView.tsx';
 export type { FumeChartViewState } from './binding.ts';
+// Drawing types used by the props/handle (the model and its helpers live in @fume/chart).
+export type { Drawing, DrawingChange, DrawingTool, DrawingType } from '@fume/chart';

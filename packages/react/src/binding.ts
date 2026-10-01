@@ -4,16 +4,19 @@
  * WHEN to create, update and dispose it. Keeping this out of the component keeps the React layer
  * thin and lets the lifecycle be tested without a DOM.
  *
- * Nothing here re-implements chart, session or feed logic: candles, paging, live updates and
- * resync all live in @fume/chart and @fume/datafeed.
+ * Nothing here re-implements chart, session or feed logic: candles, paging, live updates, resync
+ * and drawings (tools, hit-testing, editing) all live in @fume/chart and @fume/datafeed.
  */
 import {
   FumeChart,
   type ChartEnvironment,
   type ChartTheme,
+  type Drawing,
+  type DrawingChange,
+  type DrawingTool,
   type FollowingLatestState,
 } from '@fume/chart';
-import type { AssetClass, StreamState, TimeframeId } from '@fume/core';
+import { EMPTY_TIME_SCALE, type AssetClass, type StreamState, type TimeframeId } from '@fume/core';
 import {
   ChartSession,
   type ChartSessionSettings,
@@ -48,6 +51,11 @@ export interface ChartViewBindingOptions {
   onStatus?: (status: ChartStatus) => void;
   onStreamState?: (state: StreamState | null) => void;
   onFollowingLatestChange?: (state: FollowingLatestState) => void;
+  /** Initial drawings (host-owned). */
+  drawings?: readonly Drawing[];
+  onDrawingsChange?: (drawings: readonly Drawing[], change: DrawingChange) => void;
+  onDrawingToolChange?: (tool: DrawingTool) => void;
+  onDrawingSelectionChange?: (id: string | null) => void;
   /** Rendering environment (tests pass a fake; default: the browser). */
   environment?: ChartEnvironment;
 }
@@ -63,11 +71,18 @@ export class ChartViewBinding {
     this.chart = new FumeChart(
       container,
       {
-        timeScale: { toSlot: () => null, slotStart: (s) => s, boundaries: () => [] },
+        timeScale: EMPTY_TIME_SCALE,
         formatPrice: (p) => p.toFixed(2),
         formatTime: () => '',
         minPriceStep: 0.01,
         ...(options.theme ? { theme: options.theme } : {}),
+        ...(options.onDrawingsChange ? { onDrawingsChange: options.onDrawingsChange } : {}),
+        ...(options.onDrawingToolChange
+          ? { onDrawingToolChange: options.onDrawingToolChange }
+          : {}),
+        ...(options.onDrawingSelectionChange
+          ? { onDrawingSelectionChange: options.onDrawingSelectionChange }
+          : {}),
       },
       ...(options.environment ? [options.environment] : []),
     );
@@ -84,6 +99,7 @@ export class ChartViewBinding {
         ? { onFollowingLatestChange: options.onFollowingLatestChange }
         : {}),
     });
+    if (options.drawings) this.chart.setDrawings(options.drawings);
   }
 
   /**
@@ -115,6 +131,26 @@ export class ChartViewBinding {
 
   setTheme(theme: Partial<ChartTheme>): void {
     if (!this.disposed) this.chart.setOptions({ theme });
+  }
+
+  /**
+   * Host drawings. The set the chart last reported (onDrawingsChange) is already shown, so passing
+   * it back is a no-op: a controlled `drawings` prop does not loop.
+   */
+  setDrawings(drawings: readonly Drawing[]): void {
+    if (!this.disposed && drawings !== this.chart.getDrawings()) this.chart.setDrawings(drawings);
+  }
+
+  getDrawings(): readonly Drawing[] {
+    return this.chart.getDrawings();
+  }
+
+  setDrawingTool(tool: DrawingTool): void {
+    if (!this.disposed) this.chart.setDrawingTool(tool);
+  }
+
+  getDrawingTool(): DrawingTool {
+    return this.chart.getDrawingTool();
   }
 
   /** Scrolls to the newest candle the feed has; false when it is already in view. */

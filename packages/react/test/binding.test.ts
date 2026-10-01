@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ManualScheduler, ReplayDataset, ReplayMarketDataProvider } from '@fume/replay';
 import { FumeApiDataFeed, ReplayDataFeed } from '@fume/datafeed';
 import type { ChartStatus } from '@fume/datafeed';
+import type { Drawing } from '@fume/chart';
 import { FakeEnvironment, fakeContainer } from '../../chart/test/fakes.ts';
 import { fakeFetch, FakeSocket } from '../../datafeed/test/fake-backend.ts';
 import { ChartViewBinding } from '../src/binding.ts';
@@ -139,6 +140,58 @@ describe('lifecycle: nothing leaks', () => {
     expect(b.scheduler.pendingTimers()).toBeGreaterThan(0);
     expect(env.activeObservers).toBe(1);
     v2.dispose();
+  });
+});
+
+describe('drawings pass through to the chart engine', () => {
+  const line = (id: string): Drawing => ({
+    id,
+    type: 'horizontal-line',
+    anchors: [{ time: 0, price: 500 }],
+    style: { color: '#fff', lineWidth: 1, lineStyle: 'solid' },
+    visible: true,
+    locked: false,
+  });
+
+  test('initial drawings, host replacement, no-op for the reported set, tool and user edits', async () => {
+    const r = replayFeed();
+    const env = new FakeEnvironment();
+    const initial = [line('a')];
+    const changes: (readonly Drawing[])[] = [];
+    const tools: string[] = [];
+    const binding = new ChartViewBinding(fakeContainer(), {
+      datafeed: r.feed,
+      environment: env,
+      drawings: initial,
+      onDrawingsChange: (d) => changes.push(d),
+      onDrawingToolChange: (t) => tools.push(t),
+    });
+    expect(binding.getDrawings()).toBe(initial);
+    await binding.apply({ symbol: 'SPY', assetClass: 'equity', timeframe: '5m' });
+    env.resizeCallback!({ cssWidth: 800, cssHeight: 500 });
+    env.flushFrames();
+
+    // A user edit through the engine's own pointer handling (horizontal line: one click).
+    binding.setDrawingTool('horizontal-line');
+    expect(binding.getDrawingTool()).toBe('horizontal-line');
+    const overlay = env.canvases[1]!;
+    overlay.dispatch('pointerdown', { offsetX: 300, offsetY: 200, pointerId: 1, button: 0 });
+    overlay.dispatch('pointerup', { offsetX: 300, offsetY: 200, pointerId: 1, button: 0 });
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toHaveLength(2);
+    expect(tools).toEqual(['horizontal-line', 'cursor']);
+
+    // Passing the reported set back (a controlled prop) does nothing; a new set replaces.
+    binding.setDrawings(changes[0]!);
+    expect(binding.getDrawings()).toBe(changes[0]);
+    const replaced = [line('z')];
+    binding.setDrawings(replaced);
+    expect(binding.getDrawings()).toBe(replaced);
+    expect(changes).toHaveLength(1); // host replacements are not echoed
+
+    binding.dispose();
+    binding.setDrawingTool('rectangle');
+    expect(tools).toEqual(['horizontal-line', 'cursor']);
   });
 });
 

@@ -64,7 +64,8 @@ body,
   gap: 2px;
 }
 
-.timeframes button {
+.timeframes button,
+.drawing-tools button {
   background: transparent;
   color: var(--muted);
   border: 1px solid transparent;
@@ -74,18 +75,21 @@ body,
   cursor: pointer;
 }
 
-.timeframes button:hover {
+.timeframes button:hover,
+.drawing-tools button:hover {
   color: var(--text);
 }
 
-.timeframes button[aria-pressed='true'] {
+.timeframes button[aria-pressed='true'],
+.drawing-tools button[aria-pressed='true'] {
   color: var(--text);
   background: #232833;
   border-color: #343b48;
 }
 
 .symbol-picker select:focus-visible,
-.timeframes button:focus-visible {
+.timeframes button:focus-visible,
+.drawing-tools button:focus-visible {
   outline: 2px solid #5b8def;
   outline-offset: 1px;
 }
@@ -131,9 +135,34 @@ body,
   white-space: nowrap;
 }
 
+/* Below the header: the drawing toolbar rail and the chart. */
+.workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Reference drawing toolbar: a slim vertical rail left of the chart (the engine has none). */
+.drawing-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 4px;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.drawing-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+}
+
 .chart-area {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   padding: 0;
 }

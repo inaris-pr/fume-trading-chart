@@ -12,6 +12,10 @@ export interface ChartTheme {
   crosshairLine: string;
   crosshairLabelBackground: string;
   crosshairLabelText: string;
+  /** Default color of new drawings (lines, outlines, handles). */
+  drawingColor: string;
+  /** Default area fill of new rectangles. */
+  drawingFill: string;
   fontFamily: string;
   /** CSS px. */
   fontSize: number;
@@ -30,6 +34,8 @@ export const DEFAULT_THEME: Readonly<ChartTheme> = {
   crosshairLine: 'rgba(210, 216, 226, 0.55)',
   crosshairLabelBackground: '#3a4150',
   crosshairLabelText: '#eef1f6',
+  drawingColor: '#5b8cff',
+  drawingFill: 'rgba(91, 140, 255, 0.12)',
   fontFamily: 'ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace',
   fontSize: 11,
 };

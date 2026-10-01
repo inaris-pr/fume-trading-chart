@@ -345,9 +345,9 @@ describe('lifecycle', () => {
     first.destroy();
     const second = new FumeChart(container, opts, env);
     const live = env.canvases.filter((c) => !c.removed);
-    expect(live).toHaveLength(2);
-    expect(env.canvases.slice(0, 2).every((c) => c.listenerCount() === 0)).toBe(true);
-    expect(live[1]!.listenerCount()).toBe(8);
+    expect(live).toHaveLength(3); // main, overlay, drawing layer of the second chart
+    expect(env.canvases.slice(0, 3).every((c) => c.listenerCount() === 0)).toBe(true);
+    expect(live[1]!.listenerCount()).toBe(9); // the overlay: pointer, wheel, dblclick, keydown
     expect(env.activeObservers).toBe(1);
     second.destroy();
   });

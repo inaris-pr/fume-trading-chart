@@ -26,6 +26,7 @@ import {
   createPriceFormatter,
   createSessionTimeScale,
   createTimeFormatter,
+  EMPTY_TIME_SCALE,
   LiveCandleAggregator,
   mergeCanonicalBars,
   slotSpecForTimeframe,
@@ -127,12 +128,6 @@ interface Loaded {
   bars: number;
   live: LiveState | null;
 }
-
-const EMPTY_SCALE: TimeScaleMapping = {
-  toSlot: () => null,
-  slotStart: (s) => s,
-  boundaries: () => [],
-};
 
 export class ChartSession {
   private readonly datafeed: DataFeed;
@@ -300,7 +295,7 @@ export class ChartSession {
     if (this.clearOnSwitch) {
       this.chart.setData({
         bars: [],
-        timeScale: EMPTY_SCALE,
+        timeScale: EMPTY_TIME_SCALE,
         ...this.formatters,
         ...this.defaultView[timeframe],
       });

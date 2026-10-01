@@ -34,13 +34,17 @@ describe('FumeChartView', () => {
   test('the ref handle exposes only the small imperative API', () => {
     const ref = createRef<FumeChartViewHandle>();
     renderToStaticMarkup(<FumeChartView ref={ref} datafeed={feed} symbol="SPY" timeframe="5m" />);
-    // Server rendering does not attach refs; the handle's shape is checked via its type here.
-    const keys: (keyof FumeChartViewHandle)[] = [
-      'goToLatest',
-      'setTimeframe',
-      'selectInstrument',
-      'getState',
-    ];
-    expect(keys).toHaveLength(4);
+    // Server rendering does not attach refs; the handle's shape is checked via its type here: the
+    // Record must name every handle member (compile error otherwise) and nothing else.
+    const members: Record<keyof FumeChartViewHandle, true> = {
+      goToLatest: true,
+      setTimeframe: true,
+      selectInstrument: true,
+      getState: true,
+      setDrawingTool: true,
+      getDrawingTool: true,
+      getDrawings: true,
+    };
+    expect(Object.keys(members)).toHaveLength(7);
   });
 });

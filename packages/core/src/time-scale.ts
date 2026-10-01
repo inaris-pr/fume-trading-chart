@@ -37,7 +37,31 @@ export interface TimeScaleMapping {
   slotStart(slot: number): UnixMs;
   /** Boundaries whose slot lies in [fromSlot, toSlot], ascending. */
   boundaries(fromSlot: number, toSlot: number): readonly TimeBoundary[];
+  /**
+   * Continuous slot coordinate for ANY time inside the resolved calendar (drawings, overlays).
+   * Open time: the same value as toSlot (a slot's start is its integer; inside a slot it moves
+   * linearly to the next slot's start). A time in a scheduled closed period (overnight, weekend,
+   * holiday, intraday break) collapses onto the first slot after it: closed time has zero width.
+   * null outside the resolved sessions (before the first open, at/after the last close): such a
+   * time has no correct position on a session-compressed axis and is never extrapolated.
+   */
+  timeToSlotCoordinate(timeMs: UnixMs): number | null;
+  /**
+   * Inverse of timeToSlotCoordinate for coordinates in [0, slot count): the real open-market time
+   * at that coordinate (slot start + fraction of the slot's actual, possibly clipped, length).
+   * null outside the resolved slots. Never returns closed-period time.
+   */
+  slotCoordinateToTime(slot: number): UnixMs | null;
 }
+
+/** A mapping with no sessions: nothing maps (placeholder until a real calendar is loaded). */
+export const EMPTY_TIME_SCALE: TimeScaleMapping = Object.freeze({
+  toSlot: () => null,
+  slotStart: (slot: number) => slot,
+  boundaries: () => [],
+  timeToSlotCoordinate: () => null,
+  slotCoordinateToTime: () => null,
+});
 
 /**
  * - intraday: session-aligned buckets of `durationMs` inside each open window; the last bucket of
@@ -128,7 +152,27 @@ export function createSessionTimeScale(args: {
     return result;
   };
 
-  return { toSlot, slotStart, boundaries };
+  const timeToSlotCoordinate = (timeMs: UnixMs): number | null => {
+    const first = segments[0];
+    const last = segments[segments.length - 1];
+    if (!first || !last || !(timeMs >= first.start) || !(timeMs < last.end)) return null;
+    const i = lastIndexAtOrBefore(segments, timeMs, (s) => s.start);
+    const seg = segments[i]!;
+    if (timeMs < seg.end) return toSlot(timeMs);
+    // Scheduled closed period after `seg`: it ends where the next open window starts.
+    return segments[i + 1]!.firstSlot;
+  };
+
+  const slotCoordinateToTime = (slotValue: number): UnixMs | null => {
+    if (!Number.isFinite(slotValue) || slotValue < 0 || slotValue >= totalSlots) return null;
+    const n = Math.floor(slotValue);
+    const seg = segments[lastIndexAtOrBefore(segments, n, (s) => s.firstSlot)]!;
+    const start = segmentSlotStart(seg, n - seg.firstSlot, durationMs);
+    const end = durationMs === null ? seg.end : Math.min(start + durationMs, seg.end);
+    return Math.round(start + (slotValue - n) * (end - start));
+  };
+
+  return { toSlot, slotStart, boundaries, timeToSlotCoordinate, slotCoordinateToTime };
 }
 
 function buildSegments(
