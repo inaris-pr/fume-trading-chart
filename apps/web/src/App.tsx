@@ -2,7 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { AssetClass, Instrument, StreamState, TimeframeId } from '@fume/core';
 import { FumeApiDataFeed, ReplayDataFeed, type ChartStatus, type DataFeed } from '@fume/datafeed';
 import { isReplaySymbol, REPLAY_SYMBOLS } from '@fume/replay';
-import { FumeChartView, type FumeChartViewHandle } from '@fume/react';
+import {
+  FumeChartView,
+  type Drawing,
+  type DrawingTool,
+  type FumeChartViewHandle,
+} from '@fume/react';
+import { DrawingToolbar } from './DrawingToolbar.tsx';
 import { feedLabel, feedTitle } from './feed-label.ts';
 import { TwoChartProof } from './TwoChartProof.tsx';
 import { EQUITY_MENU, FUTURES_MENU, FUTURES_ROOTS, optionText } from './symbol-menu.ts';
@@ -111,6 +117,8 @@ function contractInfo(instrument: Instrument): { text: string; title: string } |
   };
 }
 
+const NO_DRAWINGS: readonly Drawing[] = [];
+
 export function App() {
   const [mode] = useState(sourceMode);
   const [feed] = useState(() => createFeed(mode));
@@ -123,6 +131,18 @@ export function App() {
   const [selection, setSelection] = useState(() => initialSelection(mode));
   const [status, setStatus] = useState<ChartStatus | null>(null);
   const [stream, setStream] = useState<StreamState | null>(null);
+  const [tool, setTool] = useState<DrawingTool>('cursor');
+  // In memory only (no persistence yet): drawings per instrument, kept across timeframes.
+  const [drawings, setDrawings] = useState<Record<string, readonly Drawing[]>>({});
+  useEffect(() => {
+    // Escape also leaves a drawing tool while the focus is on the toolbar, not the chart.
+    if (tool === 'cursor') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') viewRef.current?.setDrawingTool('cursor');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tool]);
   if (mode === 'api' && params().get('proof') === 'two-charts') {
     return <TwoChartProof datafeed={feed} />;
   }
@@ -136,6 +156,7 @@ export function App() {
     status?.kind === 'ready' || status?.kind === 'empty' ? status.instrument : undefined;
   const contract = shown ? contractInfo(shown) : null;
   const streaming = ready?.streaming ?? false;
+  const drawingKey = optionValue(selection.assetClass, selection.symbol);
 
   return (
     <div className="app">
@@ -216,19 +237,25 @@ export function App() {
           </span>
         )}
       </header>
-      <main className="chart-area">
-        <FumeChartView
-          ref={viewRef}
-          datafeed={feed}
-          {...(mode === 'replay' ? { settings: REPLAY_SESSION_SETTINGS } : {})}
-          symbol={selection.symbol}
-          assetClass={selection.assetClass}
-          timeframe={selection.timeframe}
-          statusOverlay={mode === 'api' ? statusText : false}
-          onStatus={setStatus}
-          onStreamState={setStream}
-        />
-      </main>
+      <div className="workspace">
+        <DrawingToolbar tool={tool} onSelect={(next) => viewRef.current?.setDrawingTool(next)} />
+        <main className="chart-area">
+          <FumeChartView
+            ref={viewRef}
+            datafeed={feed}
+            {...(mode === 'replay' ? { settings: REPLAY_SESSION_SETTINGS } : {})}
+            symbol={selection.symbol}
+            assetClass={selection.assetClass}
+            timeframe={selection.timeframe}
+            statusOverlay={mode === 'api' ? statusText : false}
+            onStatus={setStatus}
+            onStreamState={setStream}
+            drawings={drawings[drawingKey] ?? NO_DRAWINGS}
+            onDrawingsChange={(next) => setDrawings((all) => ({ ...all, [drawingKey]: next }))}
+            onDrawingToolChange={setTool}
+          />
+        </main>
+      </div>
     </div>
   );
 }

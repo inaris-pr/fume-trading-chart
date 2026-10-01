@@ -23,6 +23,15 @@ export class RecordingContext {
   readonly texts: { text: string; x: number; y: number; style: string; align: CanvasTextAlign }[] =
     [];
   clears = 0;
+  // Path drawing (drawing layer): every stroke()/fill() records the current path and style.
+  strokeStyle: string | CanvasGradient | CanvasPattern = '#000';
+  lineWidth = 1;
+  lineCap: CanvasLineCap = 'butt';
+  lineJoin: CanvasLineJoin = 'miter';
+  readonly strokes: (RecordedPath & { style: string; width: number; dash: number[] })[] = [];
+  readonly fills: (RecordedPath & { style: string })[] = [];
+  private path: RecordedPath = emptyPath();
+  private dash: number[] = [];
   setTransform(): void {}
   clearRect(): void {
     this.clears++;
@@ -31,13 +40,42 @@ export class RecordingContext {
   reset(): void {
     this.rects.length = 0;
     this.texts.length = 0;
+    this.strokes.length = 0;
+    this.fills.length = 0;
     this.clears = 0;
   }
   save(): void {}
   restore(): void {}
-  beginPath(): void {}
-  rect(): void {}
+  beginPath(): void {
+    this.path = emptyPath();
+  }
+  rect(x: number, y: number, w: number, h: number): void {
+    this.path.rects.push({ x, y, w, h });
+  }
   clip(): void {}
+  moveTo(x: number, y: number): void {
+    this.path.points.push({ x, y });
+  }
+  lineTo(x: number, y: number): void {
+    this.path.points.push({ x, y });
+  }
+  arc(x: number, y: number, r: number): void {
+    this.path.arcs.push({ x, y, r });
+  }
+  setLineDash(segments: number[]): void {
+    this.dash = [...segments];
+  }
+  stroke(): void {
+    this.strokes.push({
+      ...clonePath(this.path),
+      style: String(this.strokeStyle),
+      width: this.lineWidth,
+      dash: [...this.dash],
+    });
+  }
+  fill(): void {
+    this.fills.push({ ...clonePath(this.path), style: String(this.fillStyle) });
+  }
   fillRect(x: number, y: number, w: number, h: number): void {
     this.rects.push({ x, y, w, h, style: String(this.fillStyle) });
   }
@@ -48,6 +86,19 @@ export class RecordingContext {
     return { width: text.length * 7 } as TextMetrics;
   }
 }
+
+export interface RecordedPath {
+  points: { x: number; y: number }[];
+  arcs: { x: number; y: number; r: number }[];
+  rects: { x: number; y: number; w: number; h: number }[];
+}
+
+const emptyPath = (): RecordedPath => ({ points: [], arcs: [], rects: [] });
+const clonePath = (p: RecordedPath): RecordedPath => ({
+  points: [...p.points],
+  arcs: [...p.arcs],
+  rects: [...p.rects],
+});
 
 type Listener = (event: unknown) => void;
 
@@ -66,6 +117,9 @@ export interface FakeCanvas {
   setPointerCapture(id: number): void;
   releasePointerCapture(id: number): void;
   hasPointerCapture(id: number): boolean;
+  tabIndex: number;
+  focused: boolean;
+  focus(): void;
   /** Total registered listeners across all event types. */
   listenerCount(): number;
   /** Dispatches a fake event to the registered listeners; returns whether preventDefault ran. */
@@ -98,6 +152,11 @@ export function fakeCanvas(): FakeCanvas {
     setPointerCapture: (id) => void captured.add(id),
     releasePointerCapture: (id) => void captured.delete(id),
     hasPointerCapture: (id) => captured.has(id),
+    tabIndex: 0,
+    focused: false,
+    focus() {
+      this.focused = true;
+    },
     listenerCount: () => [...listeners.values()].reduce((n, set) => n + set.size, 0),
     dispatch(type, event) {
       let prevented = false;

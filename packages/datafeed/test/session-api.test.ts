@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   buildCanonicalBars,
+  EMPTY_TIME_SCALE,
   resolveWeeklySessions,
   type Bar,
   type Instrument,
@@ -382,7 +383,7 @@ describe('real FumeChart integration: older history prepends without a visual ju
     const chart = new FumeChart(
       fakeContainer(),
       {
-        timeScale: { toSlot: () => null, slotStart: (s) => s, boundaries: () => [] },
+        timeScale: EMPTY_TIME_SCALE,
         formatPrice: (p) => p.toFixed(2),
         formatTime: () => '',
         minPriceStep: 0.01,

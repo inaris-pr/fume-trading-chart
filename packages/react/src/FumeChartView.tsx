@@ -2,8 +2,9 @@
  * <FumeChartView />: the thin React binding for embedding a Fume chart (docs/embedding.md).
  *
  * React decides only WHEN things happen; ChartViewBinding (FumeChart + ChartSession) does the
- * work. Candle math, live updates, zoom, pan, crosshair and rendering never go through React
- * state: the only React state here is the optional chrome (go-to-latest visibility, status).
+ * work. Candle math, live updates, zoom, pan, crosshair, drawing tools and rendering never go
+ * through React state: the only React state here is the optional chrome (go-to-latest
+ * visibility, status). Drawing changes are reported once per user edit, never per pointer move.
  *
  * Lifecycle: one binding per mounted component and DataFeed. Unmount (or a new `datafeed`)
  * disposes it: the session unsubscribes from the feed and the chart releases its canvases,
@@ -19,7 +20,13 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import type { ChartTheme, FollowingLatestState } from '@fume/chart';
+import type {
+  ChartTheme,
+  Drawing,
+  DrawingChange,
+  DrawingTool,
+  FollowingLatestState,
+} from '@fume/chart';
 import type { AssetClass, StreamState, TimeframeId } from '@fume/core';
 import type { ChartSessionSettings, ChartStatus, DataFeed } from '@fume/datafeed';
 import { ChartViewBinding, type FumeChartViewState } from './binding.ts';
@@ -51,6 +58,18 @@ export interface FumeChartViewProps {
   onStreamState?: (state: StreamState | null) => void;
   /** Whether the newest candle is in view (and where the plot's corner is). */
   onFollowingLatestChange?: (state: FollowingLatestState) => void;
+  /**
+   * Drawings to show (host-owned; the chart never saves them). Applied when the array identity
+   * changes; passing back the array received in onDrawingsChange is a no-op. Omit to leave the
+   * chart's drawings alone.
+   */
+  drawings?: readonly Drawing[];
+  /** The user created, edited or deleted a drawing (once per edit, not per pointer move). */
+  onDrawingsChange?: (drawings: readonly Drawing[], change: DrawingChange) => void;
+  /** The drawing tool changed (e.g. back to `cursor` after a drawing is finished). */
+  onDrawingToolChange?: (tool: DrawingTool) => void;
+  /** The selected drawing changed (null: none). */
+  onDrawingSelectionChange?: (id: string | null) => void;
 }
 
 /** Imperative operations that should not need a React render. */
@@ -63,6 +82,11 @@ export interface FumeChartViewHandle {
   selectInstrument(symbol: string, assetClass?: AssetClass): Promise<void>;
   /** Current series snapshot (null while nothing is loaded). */
   getState(): FumeChartViewState | null;
+  /** `cursor` (select/move) or a drawing type to create one; cancels an unfinished drawing. */
+  setDrawingTool(tool: DrawingTool): void;
+  getDrawingTool(): DrawingTool;
+  /** The chart's current drawings (z-order, bottom first). */
+  getDrawings(): readonly Drawing[];
 }
 
 const ROOT_STYLE: CSSProperties = { position: 'relative', width: '100%', height: '100%' };
@@ -121,6 +145,10 @@ export const FumeChartView = forwardRef<FumeChartViewHandle, FumeChartViewProps>
           setFollow(s);
           latest.current.props.onFollowingLatestChange?.(s);
         },
+        ...(p.drawings ? { drawings: p.drawings } : {}),
+        onDrawingsChange: (d, change) => latest.current.props.onDrawingsChange?.(d, change),
+        onDrawingToolChange: (tool) => latest.current.props.onDrawingToolChange?.(tool),
+        onDrawingSelectionChange: (id) => latest.current.props.onDrawingSelectionChange?.(id),
       });
       bindingRef.current = binding;
       const { symbol: s, assetClass: ac, timeframe: tf } = latest.current;
@@ -138,6 +166,12 @@ export const FumeChartView = forwardRef<FumeChartViewHandle, FumeChartViewProps>
       void bindingRef.current?.apply({ symbol, assetClass, timeframe });
     }, [symbol, assetClass, timeframe]);
 
+    // Host drawings: replaced when the array changes (no-op for the chart's own last report).
+    const { drawings } = props;
+    useEffect(() => {
+      if (drawings) bindingRef.current?.setDrawings(drawings);
+    }, [drawings]);
+
     const appliedTheme = useRef(theme);
     useEffect(() => {
       if (appliedTheme.current === theme) return;
@@ -153,6 +187,9 @@ export const FumeChartView = forwardRef<FumeChartViewHandle, FumeChartViewProps>
         selectInstrument: (sym, ac = 'equity') =>
           bindingRef.current?.selectInstrument(sym, ac) ?? Promise.resolve(),
         getState: () => bindingRef.current?.state() ?? null,
+        setDrawingTool: (tool) => bindingRef.current?.setDrawingTool(tool),
+        getDrawingTool: () => bindingRef.current?.getDrawingTool() ?? 'cursor',
+        getDrawings: () => bindingRef.current?.getDrawings() ?? [],
       }),
       [],
     );

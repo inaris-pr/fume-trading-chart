@@ -1,11 +1,13 @@
 /**
- * FumeChart: one instance per chart. Owns two stacked canvases, sizing, interaction state and
+ * FumeChart: one instance per chart. Owns three stacked canvases, sizing, interaction state and
  * render scheduling; delegates math to pure modules and drawing to the painters.
  *
- * Layers (both DPR-correct, sized together, removed by destroy()):
+ * Layers (all DPR-correct, sized together, removed by destroy()), bottom to top:
  * - main canvas: grid, candles, axes, last price. Repainted only when data, view or size change.
+ * - drawing canvas: user drawings (docs/drawings.md). Repainted when the view changes or a drawing,
+ *   the selection, the hover or an unfinished drawing changes; never rebuilds the candle frame.
  * - overlay canvas: crosshair, crosshair readouts, OHLC legend. Repainted on pointer moves without
- *   rebuilding the frame. It sits on top and receives all pointer and wheel events.
+ *   rebuilding the frame. It sits on top and receives all pointer, wheel and key events.
  */
 import type { Bar, PriceFormatter, TimeFormatter, TimeScaleMapping, UnixMs } from '@fume/core';
 import { backingStoreSize } from './layout.ts';
@@ -57,6 +59,20 @@ import {
   type PriceScaleMode,
 } from './price-scale-state.ts';
 import type { PriceRange } from './price-scale.ts';
+import { createChartCoordinates, type ChartCoordinates } from './coordinates.ts';
+import {
+  defaultDrawingId,
+  DrawingController,
+  type DrawingInteractionState,
+} from './drawings/controller.ts';
+import { paintDrawings } from './drawings/paint.ts';
+import type {
+  Drawing,
+  DrawingChange,
+  DrawingStyle,
+  DrawingTool,
+  DrawingType,
+} from './drawings/model.ts';
 
 export interface FumeChartOptions {
   /** Session-aware slot mapping (built outside the chart, e.g. by @fume/core). */
@@ -82,6 +98,18 @@ export interface FumeChartOptions {
    * it to show a "go to latest" control while the latest bar is out of view.
    */
   onFollowingLatestChange?: (state: FollowingLatestState) => void;
+  /**
+   * The USER changed the drawings (created, moved/reshaped, deleted). Receives the complete new
+   * set; persist it if needed. Not called for setDrawings() and never during a drag (once at the
+   * end of it). The chart does not save drawings.
+   */
+  onDrawingsChange?: (drawings: readonly Drawing[], change: DrawingChange) => void;
+  /** The active drawing tool changed (including back to `cursor` after a drawing is finished). */
+  onDrawingToolChange?: (tool: DrawingTool) => void;
+  /** The selected drawing changed (null: nothing selected). */
+  onDrawingSelectionChange?: (id: string | null) => void;
+  /** Id for a drawing the user creates. Default: crypto.randomUUID(). */
+  createDrawingId?: () => string;
 }
 
 /** Live-follow state plus where the plot's bottom-right corner is (for placing a control). */
@@ -128,9 +156,12 @@ const PRICE_AXIS_PADDING = 18;
 export class FumeChart {
   private readonly env: ChartEnvironment;
   private readonly canvas: HTMLCanvasElement;
+  private readonly drawingCanvas: HTMLCanvasElement;
   private readonly overlay: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
+  private readonly drawingCtx: CanvasRenderingContext2D;
   private readonly overlayCtx: CanvasRenderingContext2D;
+  private readonly drawings: DrawingController;
   private readonly candles = new CandleBuffer();
   private readonly disposers: (() => void)[] = [];
   private options: FumeChartOptions;
@@ -149,9 +180,13 @@ export class FumeChart {
   /** Low/high of all bars (for manual price-scale limits); null without data. */
   private dataRange: PriceRange | null = null;
   private mainDirty = true;
+  private drawingsDirty = true;
   private pendingFrame = 0;
   private destroyed = false;
   private lastFrame: Frame | null = null;
+  /** The time scale the last frame was built with (coordinates must match the picture). */
+  private frameMapping: TimeScaleMapping | null = null;
+  private coordinatesCache: { frame: Frame; coords: ChartCoordinates | null } | null = null;
 
   constructor(
     container: HTMLElement,
@@ -165,11 +200,22 @@ export class FumeChart {
 
     this.canvas = env.createCanvas(container);
     this.overlay = env.createCanvas(container);
+    this.drawingCanvas = env.createCanvas(container);
     const ctx = this.canvas.getContext('2d', { alpha: false });
     const overlayCtx = this.overlay.getContext('2d');
-    if (!ctx || !overlayCtx) throw new Error('Canvas 2D context is unavailable');
+    const drawingCtx = this.drawingCanvas.getContext('2d');
+    if (!ctx || !overlayCtx || !drawingCtx) throw new Error('Canvas 2D context is unavailable');
     this.ctx = ctx;
     this.overlayCtx = overlayCtx;
+    this.drawingCtx = drawingCtx;
+    this.drawings = new DrawingController({
+      createId: () => this.options.createDrawingId?.() ?? defaultDrawingId(),
+      defaultStyle: (type) => this.defaultDrawingStyle(type),
+      onDrawingsChange: (drawings, change) => this.options.onDrawingsChange?.(drawings, change),
+      onToolChange: (tool) => this.options.onDrawingToolChange?.(tool),
+      onSelectionChange: (id) => this.options.onDrawingSelectionChange?.(id),
+      onInvalidate: () => this.invalidate('drawings'),
+    });
     const layer = {
       display: 'block',
       position: 'absolute',
@@ -178,12 +224,17 @@ export class FumeChart {
       height: '100%',
     };
     Object.assign(this.canvas.style, layer, { pointerEvents: 'none' });
+    Object.assign(this.drawingCanvas.style, layer, { pointerEvents: 'none' });
     Object.assign(this.overlay.style, layer, {
       cursor: 'crosshair',
       touchAction: 'none',
       userSelect: 'none',
+      outline: 'none',
     });
+    // Focusable from script (not a tab stop) so Delete/Escape reach the chart after a click.
+    this.overlay.tabIndex = -1;
     container.appendChild(this.canvas);
+    container.appendChild(this.drawingCanvas);
     container.appendChild(this.overlay);
 
     this.disposers.push(env.observeResize(container, (size) => this.resize(size)));
@@ -196,6 +247,7 @@ export class FumeChart {
     this.listen('pointerleave', () => this.onPointerLeave());
     this.listen('dblclick', (e) => this.onDoubleClick(e as MouseEvent));
     this.listen('wheel', (e) => this.onWheel(e as WheelEvent), { passive: false });
+    this.listen('keydown', (e) => this.onKeyDown(e as KeyboardEvent));
   }
 
   /**
@@ -355,6 +407,7 @@ export class FumeChart {
     if (cssWidth <= 0 || cssHeight <= 0) return;
     const mainRendered = this.mainDirty || !this.lastFrame;
     if (mainRendered) this.renderMain(cssWidth, cssHeight);
+    if (mainRendered || this.drawingsDirty) this.renderDrawings();
     this.renderOverlay();
     this.mainDirty = false;
     if (mainRendered) {
@@ -401,14 +454,71 @@ export class FumeChart {
     return this.series.unmappedCount;
   }
 
+  // --- coordinates & drawings (docs/drawings.md) ------------------------------------------------
+
+  /**
+   * Market <-> pixel conversion for what is on screen now (the last rendered frame), or null before
+   * the first frame with data. A new object after every frame; do not keep it across renders.
+   */
+  getCoordinates(): ChartCoordinates | null {
+    const frame = this.lastFrame;
+    if (!frame || !this.frameMapping) return null;
+    if (this.coordinatesCache?.frame !== frame) {
+      this.coordinatesCache = { frame, coords: createChartCoordinates(frame, this.frameMapping) };
+    }
+    return this.coordinatesCache.coords;
+  }
+
+  /**
+   * Replaces all drawings (host-owned data, e.g. loaded from storage or another symbol's set).
+   * Not reported through onDrawingsChange. Cancels a drawing drag in progress.
+   */
+  setDrawings(drawings: readonly Drawing[]): void {
+    if (this.destroyed) return;
+    this.drawings.setDrawings(drawings);
+  }
+
+  /** The current drawings, in z-order (bottom first). The array is replaced, never mutated. */
+  getDrawings(): readonly Drawing[] {
+    return this.drawings.getDrawings();
+  }
+
+  /** `cursor` (select/move) or a drawing type to create one; cancels an unfinished drawing. */
+  setDrawingTool(tool: DrawingTool): void {
+    if (this.destroyed) return;
+    this.drawings.setTool(tool);
+    this.updateCursor();
+  }
+
+  getDrawingTool(): DrawingTool {
+    return this.drawings.getTool();
+  }
+
+  selectDrawing(id: string | null): void {
+    if (this.destroyed) return;
+    this.drawings.select(id);
+  }
+
+  getSelectedDrawingId(): string | null {
+    return this.drawings.getSelectedId();
+  }
+
+  /** Current interaction state (idle / drawing / dragging-drawing / dragging-handle). */
+  getDrawingInteractionState(): Readonly<DrawingInteractionState> {
+    return this.drawings.getState();
+  }
+
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
     if (this.pendingFrame) this.env.cancelFrame(this.pendingFrame);
     this.pendingFrame = 0;
     for (const dispose of this.disposers.splice(0)) dispose();
+    this.drawings.dispose();
     this.canvas.remove();
+    this.drawingCanvas.remove();
     this.overlay.remove();
+    this.coordinatesCache = null;
     this.lastFrame = null;
     this.crosshair = null;
     this.drag = IDLE_DRAG;
@@ -416,6 +526,9 @@ export class FumeChart {
     this.options = { ...this.options };
     delete this.options.onNeedsOlderData;
     delete this.options.onFollowingLatestChange;
+    delete this.options.onDrawingsChange;
+    delete this.options.onDrawingToolChange;
+    delete this.options.onDrawingSelectionChange;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -446,6 +559,33 @@ export class FumeChart {
     );
     paintFrame(this.ctx, frame, this.theme);
     this.lastFrame = frame;
+    this.frameMapping = this.options.timeScale;
+  }
+
+  private renderDrawings(): void {
+    const frame = this.lastFrame;
+    if (!frame) return;
+    const coords = this.getCoordinates();
+    const c = this.drawings;
+    paintDrawings(
+      this.drawingCtx,
+      frame,
+      coords ? c.geometries(coords) : [],
+      {
+        selectedId: c.getSelectedId(),
+        hoveredId: c.hoveredId(),
+        preview: coords ? c.preview(coords) : null,
+      },
+      this.theme,
+    );
+    this.drawingsDirty = false;
+  }
+
+  private defaultDrawingStyle(type: DrawingType): DrawingStyle {
+    const color = this.theme.drawingColor;
+    if (type === 'rectangle')
+      return { color, lineWidth: 1, lineStyle: 'solid', fillColor: this.theme.drawingFill };
+    return { color, lineWidth: 2, lineStyle: 'solid' };
   }
 
   private renderOverlay(): void {
@@ -490,6 +630,8 @@ export class FumeChart {
   }
 
   private reindex(bars: readonly Bar[] = this.series.bars): void {
+    // New dataset: an unfinished drawing or a drag in progress refers to the old picture.
+    this.drawings.cancelInteraction();
     this.series = toMutableSeries(indexSeries(bars, this.options.timeScale));
     this.priceAxisWidth = this.measurePriceAxisWidth();
     this.lastFrame = null;
@@ -604,7 +746,7 @@ export class FumeChart {
       this.env.devicePixelRatio(),
       size.device,
     );
-    for (const canvas of [this.canvas, this.overlay]) {
+    for (const canvas of [this.canvas, this.drawingCanvas, this.overlay]) {
       if (canvas.width !== backing.width) canvas.width = backing.width;
       if (canvas.height !== backing.height) canvas.height = backing.height;
     }
@@ -627,8 +769,21 @@ export class FumeChart {
     const frame = this.lastFrame;
     if (!frame) return;
     const pointer = { pointerId: e.pointerId, x: e.offsetX, y: e.offsetY, button: e.button };
+    const inPlot = isInsidePlot(frame, e.offsetX, e.offsetY);
+    if (inPlot) {
+      this.focusSurface();
+      // Drawings first: a tool click, a drawing or handle press is theirs; empty space pans.
+      if (!this.drag.active && this.drawings.pointerDown(pointer, this.getCoordinates())) {
+        e.preventDefault?.();
+        this.capture(e.pointerId);
+        this.pointer = { x: e.offsetX, y: e.offsetY };
+        this.updateCursor();
+        this.invalidate('overlay');
+        return;
+      }
+    }
     let next = this.drag;
-    if (isInsidePlot(frame, e.offsetX, e.offsetY)) {
+    if (inPlot) {
       const manualRange = this.priceScale.mode === 'manual' ? this.priceScale.range : null;
       next = beginDrag(this.drag, pointer, this.view, manualRange);
     } else if (isInsidePriceAxis(frame, e.offsetX, e.offsetY) && frame.priceScale) {
@@ -642,11 +797,7 @@ export class FumeChart {
     if (next === this.drag || !next.active) return;
     this.drag = next;
     e.preventDefault?.();
-    try {
-      this.overlay.setPointerCapture(e.pointerId);
-    } catch {
-      // Capture can fail for synthetic or already-released pointers; dragging still works.
-    }
+    this.capture(e.pointerId);
     this.overlay.style.cursor = next.kind === 'pan' ? 'grabbing' : 'ns-resize';
     this.pointer = { x: e.offsetX, y: e.offsetY };
     this.invalidate('overlay');
@@ -656,6 +807,14 @@ export class FumeChart {
     this.pointer = { x: e.offsetX, y: e.offsetY };
     const frame = this.lastFrame;
     const drag = this.drag;
+    if (!(drag.active && drag.pointerId === e.pointerId)) {
+      const pointer = { pointerId: e.pointerId, x: e.offsetX, y: e.offsetY, button: e.button };
+      if (this.drawings.pointerMove(pointer, this.getCoordinates())) {
+        this.updateCursor();
+        this.invalidate('overlay');
+        return;
+      }
+    }
     if (frame && drag.active && drag.pointerId === e.pointerId) {
       if (drag.kind === 'pan') {
         const { dx, dy } = panDragDeltas(drag, {
@@ -697,22 +856,24 @@ export class FumeChart {
       this.invalidate('main');
       return;
     }
-    if (frame) this.overlay.style.cursor = this.cursorAt(frame, e.offsetX, e.offsetY);
+    this.updateCursor();
     this.invalidate('overlay');
   }
 
   private onPointerUp(e: PointerLike, cancelled: boolean): void {
+    const pointer = { pointerId: e.pointerId, x: e.offsetX, y: e.offsetY, button: e.button };
+    if (this.drawings.pointerUp(pointer, this.getCoordinates(), cancelled)) {
+      this.release(e.pointerId);
+      if (cancelled) this.pointer = null;
+      this.updateCursor();
+      this.invalidate('overlay');
+      return;
+    }
     const wasActive = this.drag.active;
     this.drag = endDrag(this.drag, e.pointerId);
     if (wasActive && !this.drag.active) {
-      const frame = this.lastFrame;
-      this.overlay.style.cursor = frame ? this.cursorAt(frame, e.offsetX, e.offsetY) : 'crosshair';
-      try {
-        if (this.overlay.hasPointerCapture?.(e.pointerId))
-          this.overlay.releasePointerCapture(e.pointerId);
-      } catch {
-        // Already released.
-      }
+      this.updateCursor();
+      this.release(e.pointerId);
     }
     if (cancelled) this.pointer = null;
     this.invalidate('overlay');
@@ -720,6 +881,7 @@ export class FumeChart {
 
   private onPointerLeave(): void {
     if (this.drag.active) return;
+    this.drawings.pointerLeave();
     this.pointer = null;
     this.invalidate('overlay');
   }
@@ -780,6 +942,56 @@ export class FumeChart {
     this.invalidate('main');
   }
 
+  private onKeyDown(e: KeyboardEvent): void {
+    if (this.destroyed) return;
+    if (this.drawings.keyDown(e.key)) {
+      e.preventDefault();
+      this.updateCursor();
+    }
+  }
+
+  private focusSurface(): void {
+    try {
+      this.overlay.focus?.({ preventScroll: true });
+    } catch {
+      // Focus is a convenience for keyboard shortcuts; pointer interaction works without it.
+    }
+  }
+
+  private capture(pointerId: number): void {
+    try {
+      this.overlay.setPointerCapture(pointerId);
+    } catch {
+      // Capture can fail for synthetic or already-released pointers; dragging still works.
+    }
+  }
+
+  private release(pointerId: number): void {
+    try {
+      if (this.overlay.hasPointerCapture?.(pointerId))
+        this.overlay.releasePointerCapture(pointerId);
+    } catch {
+      // Already released.
+    }
+  }
+
+  /** Cursor for the pointer's position: chart drags, then drawing state/hover, then the region. */
+  private updateCursor(): void {
+    const frame = this.lastFrame;
+    const p = this.pointer;
+    if (this.drag.active) {
+      this.overlay.style.cursor = this.drag.kind === 'pan' ? 'grabbing' : 'ns-resize';
+      return;
+    }
+    if (!frame || !p) {
+      this.overlay.style.cursor = 'crosshair';
+      return;
+    }
+    const inPlot = isInsidePlot(frame, p.x, p.y);
+    this.overlay.style.cursor =
+      (inPlot ? this.drawings.cursor() : null) ?? this.cursorAt(frame, p.x, p.y);
+  }
+
   private cursorAt(frame: Frame, x: number, y: number): string {
     if (isInsidePlot(frame, x, y)) return 'crosshair';
     if (isInsidePriceAxis(frame, x, y)) return 'ns-resize';
@@ -791,8 +1003,9 @@ export class FumeChart {
   }
 
   /** Coalesces changes into one render on the next animation frame. */
-  private invalidate(layer: 'main' | 'overlay'): void {
+  private invalidate(layer: 'main' | 'drawings' | 'overlay'): void {
     if (layer === 'main') this.mainDirty = true;
+    if (layer === 'drawings') this.drawingsDirty = true;
     if (this.destroyed || this.pendingFrame) return;
     this.pendingFrame = this.env.requestFrame(() => {
       this.pendingFrame = 0;

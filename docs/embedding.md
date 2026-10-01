@@ -1,11 +1,11 @@
 # Embedding Fume (React component, headless session + DataFeed)
 
-Status: **Stage 6 "React embedding"** (2026-09-30, uncommitted), on top of the Stage 5 headless
-session + DataFeed extraction. A React application embeds a Fume chart with `<FumeChartView />`
+Status: **Stage 7 "drawing foundation"** (2026-10-01, uncommitted): drawings added to the Stage 6
+React embedding and the Stage 5 headless session + DataFeed extraction. A React application embeds a Fume chart with `<FumeChartView />`
 (`@fume/react`); any other host drives the framework-free packages directly. The standalone app
 (`apps/web`) consumes both only through their public entry points, exactly as another application
-would. Not yet: drawings, indicators, layouts, packaging (compiled builds), cross-origin backend
-auth.
+would. Drawings: [drawings.md](drawings.md). Not yet: indicators, layouts, packaging (compiled
+builds), cross-origin backend auth.
 
 ## Packages
 
@@ -54,20 +54,24 @@ re-renders only for its optional chrome.
 
 ### Props
 
-| Prop                      | Required | Default    | Meaning                                                                                      |
-| ------------------------- | -------- | ---------- | -------------------------------------------------------------------------------------------- |
-| `datafeed`                | yes      |            | Any `DataFeed` (`FumeApiDataFeed`, `ReplayDataFeed`, your own). Share one instance per page. |
-| `symbol`                  | yes      |            | Ticker or futures root (`"SPY"`, `"NQ"`).                                                    |
-| `timeframe`               | yes      |            | `'1d'`, `'4h'`, `'1h'`, `'15m'`, `'5m'` or `'1m'`.                                           |
-| `assetClass`              | no       | `'equity'` | `'future'` resolves a root to a specific contract.                                           |
-| `settings`                | no       | defaults   | `ChartSessionSettings`; **read when the view is created** (remount with a `key` to change).  |
-| `theme`                   | no       | built-in   | `Partial<ChartTheme>`; applied live when the object identity changes (memoize it).           |
-| `className`, `style`      | no       |            | Added to / merged into the root `div.fume-chart`.                                            |
-| `goToLatestButton`        | no       | `true`     | Built-in "go to latest" button while the newest candle is out of view.                       |
-| `statusOverlay`           | no       | `false`    | Built-in loading/empty/error notice: `true` (generic text) or `(status) => ReactNode`.       |
-| `onStatus`                | no       |            | `ChartStatus`: `loading`, then `ready`, `empty` or `error`.                                  |
-| `onStreamState`           | no       |            | Live connection health of the shown instrument (`null` = history only).                      |
-| `onFollowingLatestChange` | no       |            | `{ following, plotCorner }`: whether the newest candle is in view (for your own button).     |
+| Prop                       | Required | Default    | Meaning                                                                                      |
+| -------------------------- | -------- | ---------- | -------------------------------------------------------------------------------------------- |
+| `datafeed`                 | yes      |            | Any `DataFeed` (`FumeApiDataFeed`, `ReplayDataFeed`, your own). Share one instance per page. |
+| `symbol`                   | yes      |            | Ticker or futures root (`"SPY"`, `"NQ"`).                                                    |
+| `timeframe`                | yes      |            | `'1d'`, `'4h'`, `'1h'`, `'15m'`, `'5m'` or `'1m'`.                                           |
+| `assetClass`               | no       | `'equity'` | `'future'` resolves a root to a specific contract.                                           |
+| `settings`                 | no       | defaults   | `ChartSessionSettings`; **read when the view is created** (remount with a `key` to change).  |
+| `theme`                    | no       | built-in   | `Partial<ChartTheme>`; applied live when the object identity changes (memoize it).           |
+| `className`, `style`       | no       |            | Added to / merged into the root `div.fume-chart`.                                            |
+| `goToLatestButton`         | no       | `true`     | Built-in "go to latest" button while the newest candle is out of view.                       |
+| `statusOverlay`            | no       | `false`    | Built-in loading/empty/error notice: `true` (generic text) or `(status) => ReactNode`.       |
+| `onStatus`                 | no       |            | `ChartStatus`: `loading`, then `ready`, `empty` or `error`.                                  |
+| `onStreamState`            | no       |            | Live connection health of the shown instrument (`null` = history only).                      |
+| `onFollowingLatestChange`  | no       |            | `{ following, plotCorner }`: whether the newest candle is in view (for your own button).     |
+| `drawings`                 | no       |            | Drawings to show (host-owned). Applied when the array changes; omit to leave them alone.     |
+| `onDrawingsChange`         | no       |            | `(drawings, change)`: the user added/edited/removed one; once per edit, never per move.      |
+| `onDrawingToolChange`      | no       |            | Active tool changed (e.g. back to `cursor` after a drawing is finished).                     |
+| `onDrawingSelectionChange` | no       |            | Selected drawing id (null: none).                                                            |
 
 Changing `symbol`/`assetClass` selects the new instrument (cached resolves are reused); changing
 only `timeframe` switches the timeframe on the same subscription; a re-render with the same values
@@ -76,6 +80,13 @@ does nothing. Callbacks are read through a ref, so inline functions never recrea
 **Headless mode:** `goToLatestButton={false}` (with the default `statusOverlay={false}`) renders
 only the chart; drive your own chrome from `onStatus`, `onStreamState` and
 `onFollowingLatestChange`.
+
+**Drawings** (model, coordinates, tools: [drawings.md](drawings.md)) are edited by the engine; the
+component only passes them through. Controlled use: keep the set in host state, pass it as
+`drawings`, update it from `onDrawingsChange`. Passing back the array you received is a no-op, so
+this does not loop and does not re-render during pointer movement. The host persists the set
+(`serializeDrawings` / `parseDrawingDocument` from `@fume/chart`) and decides per-symbol keying.
+The engine has no drawing toolbar; the host builds one and calls `setDrawingTool` (handle).
 
 **Not exposed (yet):** crosshair and visible-range events. The engine draws the crosshair and
 manages its view internally and has no public notification hooks for them, so the binding does
@@ -88,6 +99,9 @@ view.current?.goToLatest(); // boolean: false when already following the newest 
 await view.current?.setTimeframe('1h'); // until the next `timeframe` prop change
 await view.current?.selectInstrument('ES', 'future'); // until the next symbol/assetClass change
 view.current?.getState(); // { symbol, timeframe, bars, hasMore, streaming, followingLatest } | null
+view.current?.setDrawingTool('trend-line'); // or 'horizontal-line' | 'rectangle' | 'cursor'
+view.current?.getDrawingTool();
+view.current?.getDrawings(); // current set, z-order bottom first
 ```
 
 Props stay the source of truth: an imperative switch lasts until the corresponding prop changes.
@@ -143,7 +157,7 @@ const feed = new FumeApiDataFeed({
 });
 
 const chart = new FumeChart(container, {
-  timeScale: { toSlot: () => null, slotStart: (s) => s, boundaries: () => [] },
+  timeScale: EMPTY_TIME_SCALE, // from @fume/core; ChartSession replaces it
   formatPrice: (p) => p.toFixed(2),
   formatTime: () => '',
   minPriceStep: 0.01,

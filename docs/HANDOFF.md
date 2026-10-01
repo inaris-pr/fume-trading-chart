@@ -2,11 +2,16 @@
 
 ## Current status
 
-**Current stage: Stage 6 — React embedding** (branch `stage-6/react-embedding`)
+**Current stage: Stage 7 — Drawing foundation** (branch `stage-7/drawing-foundation`)
 
-Status: **IMPLEMENTED (uncommitted, local only), AWAITING OWNER REVIEW.** New `@fume/react`
-package (`<FumeChartView />`, imperative ref, optional go-to-latest + status chrome, headless
-mode); `apps/web` and the two-chart proof render through it; docs/embedding.md documents it.
+Status: **IMPLEMENTED (uncommitted, local only), AWAITING OWNER REVIEW.** Drawing system inside
+the chart engine ([drawings.md](drawings.md)): third canvas layer, versioned serializable model
+(time + price anchors), public `ChartCoordinates`, framework-free tool state machine,
+hit-testing; trend line (complete), horizontal line, rectangle. Core time scale gained
+`timeToSlotCoordinate` / `slotCoordinateToTime`. `@fume/react` passes drawings through;
+`apps/web` has a reference toolbar (left rail) with in-memory per-instrument drawings.
+
+Stage 6 (`@fume/react`, squash-merged to `main` as `0a6831c`) is complete.
 
 Stage 5 (squash-merged to `main` as `3597927`) summary follows.
 
@@ -123,6 +128,7 @@ WebSocket upgrades, JWT verification in the Worker).
   instruments, calendar sessions, Fume canonical aggregation and HTTP paging (`?source=api`).
 - **Stage 5:** Massive delayed futures streaming (feed-scoped Durable Object hubs), ES/DIA and
   selector labels, `@fume/datafeed` (headless `ChartSession` + `DataFeed`), two-chart proof.
+- **Stage 6:** `@fume/react` (`<FumeChartView />`), React 18/19 peer range; `apps/web` migrated.
 
 ## Stage 4 verified facts (spike S1, `pnpm s1`)
 
@@ -193,18 +199,18 @@ pnpm scan:bundle    # after pnpm build
 
 ## Exact next action
 
-**STOP: owner review of the uncommitted Stage 6 work** (branch `stage-6/react-embedding`, not
-committed or pushed): `@fume/react` (`<FumeChartView />`), `apps/web` migrated to it (UI
-unchanged), two-chart proof on two `<FumeChartView />`s sharing one `FumeApiDataFeed`,
-docs/embedding.md. After approval: commit, push, PR, owner squash-merge; the next stage starts
-only on explicit approval.
+**STOP: owner review of the uncommitted Stage 7 work** (branch `stage-7/drawing-foundation`, not
+committed or pushed): drawing foundation (docs/drawings.md), reference toolbar. After approval:
+commit, push, PR, owner squash-merge; the next stage starts only on explicit approval.
 
 Local run: `pnpm dev:api` (Worker + Durable Object hub, needs the keys in
 `apps/worker/.dev.vars`), then `http://localhost:5173/?source=api&symbol=NQ&asset=future&tf=5m`.
 Only one process may hold the Massive connection.
 
-Not started: crosshair/visible-range engine events, overlay/drawings/indicators, layout
-persistence, packaging (compiled builds), cross-origin backend auth, trading-platform integration.
+Not started: crosshair/visible-range engine events, further drawing tools (Fibonacci, text,
+rays, channels, measurement), drawing persistence (host-owned), indicators, layout persistence,
+AI annotations, packaging (compiled builds), cross-origin backend auth, trading-platform
+integration.
 
 ## Recovery instructions
 
