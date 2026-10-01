@@ -62,7 +62,7 @@ describe('DrawingController state machine', () => {
       { time: 10 * SLOT_MS, price: 600 },
       { time: 30 * SLOT_MS, price: 700 },
     ]);
-    expect(changes).toEqual([{ kind: 'add', id: 'id1' }]);
+    expect(changes).toEqual([{ kind: 'add', id: 'id1', source: 'edit' }]);
     expect(events).toEqual(['tool:trend-line', 'select:id1', 'tool:cursor']);
   });
 
@@ -87,7 +87,7 @@ describe('DrawingController state machine', () => {
     expect(changes).toEqual([]);
     c.pointerUp(P(500, 200), coords, false);
     expect(c.getDrawings()[0]!.anchors[1]).toEqual({ time: 50 * SLOT_MS, price: 800 });
-    expect(changes).toEqual([{ kind: 'update', id: 'x' }]);
+    expect(changes).toEqual([{ kind: 'update', id: 'x', source: 'edit' }]);
 
     c.pointerDown(P(200, 350), coords); // on the body (between the ends)
     expect(c.getState()).toMatchObject({ kind: 'dragging-drawing', id: 'x' });

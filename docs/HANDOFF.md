@@ -8,8 +8,9 @@ this file) is the source of truth; do not reconstruct decisions from memory.
 
 - **Branch:** `stage-8/drawing-ux` (local only), created from `main`.
 - **`main`:** `a4e3926542cffc4fe1f11aae26fd5ed96298857d` (Stage 7 squash merge, PR #7).
-- **Stage 8 — Drawing UX: defined below, NOT started.** Implement only after explicit owner
-  approval.
+- **Stage 8 — Drawing UX: IMPLEMENTED (uncommitted, local only), AWAITING OWNER REVIEW.** Style
+  editing, lock, visibility, duplicate, undo/redo, keyboard shortcuts, selection polish; contextual
+  bar, undo/redo and drawing list in the reference app ([drawings.md](drawings.md) "Drawing UX").
 - Everything runs locally (Vite + `wrangler dev`); nothing is deployed.
 
 ## Completed stages (all squash-merged into `main`)
@@ -52,8 +53,10 @@ session-aware compressed time, live (delayed futures) and replay data, shared st
 **Drawings** ([drawings.md](drawings.md)): dedicated drawing canvas; anchors in market coordinates
 (time + price); versioned schema (`fume.drawings` v1); hit-testing; selection; draggable handles;
 whole-drawing dragging; Delete/Backspace; Escape cancels; Trend Line, Horizontal Line, Rectangle;
-left drawing toolbar (rail) in the reference app. Drawings live in memory per instrument in
-`apps/web` (lost on reload).
+left drawing toolbar (rail) in the reference app. Stage 8: style editing (color, width, line
+style, rectangle fill + opacity), lock, show/hide, duplicate, undo/redo (engine history),
+keyboard shortcuts, contextual style bar and drawing list. Drawings live in memory per instrument
+in `apps/web` (lost on reload).
 
 ## Architecture in one screen
 
@@ -111,7 +114,7 @@ pnpm dev:api        # web + Worker; open http://localhost:5173/?source=api
 ## Quality gates (all must pass before a commit)
 
 `pnpm test` · `pnpm typecheck` · `pnpm format:check` · `pnpm scan:secrets` · `pnpm build` ·
-`pnpm scan:bundle`. At Stage 7: **712 tests in 49 files pass**; all gates green.
+`pnpm scan:bundle`. Stage 8 (uncommitted): **760 tests in 52 files pass**; all gates green.
 
 ## Security state
 
@@ -123,18 +126,18 @@ pnpm dev:api        # web + Worker; open http://localhost:5173/?source=api
 
 ## Known limitations
 
-- No drawing persistence across reload; no undo/redo; no drawing styling UI; no multi-select; no
-  magnet/snapping mode (time snaps to bars, price is free); no touch-specific drawing UX.
+- No drawing persistence across reload; no multi-select; no magnet/snapping mode (time snaps to
+  bars, price is free); no touch-specific drawing UX; undo history is per chart and is cleared on a
+  symbol switch.
 - Drawings whose anchors lie outside the loaded calendar are hidden until that history is paged in.
 - No crosshair/visible-range events on the engine API.
 - No indicators; no brokerage/order execution; no trading-platform integration.
 - Equities are history-only (no live Alpaca stream); `adjustment=raw` shows splits as price cliffs.
 - Packages export TypeScript source (no compiled builds); no cross-origin backend auth.
 
-## Next milestone: Stage 8 — Drawing UX (defined, NOT started)
+## Current milestone: Stage 8 — Drawing UX (implemented, awaiting review)
 
-Polish the existing drawing system; owner approval required before implementation, and the scope
-is refined at that point. Likely scope:
+Polish of the existing drawing system. Delivered scope:
 
 - Styling controls: line color, line width, solid/dashed/dotted, rectangle fill/opacity.
 - Lock/unlock, show/hide, duplicate.

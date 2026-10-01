@@ -44,7 +44,16 @@ describe('FumeChartView', () => {
       setDrawingTool: true,
       getDrawingTool: true,
       getDrawings: true,
+      selectDrawing: true,
+      getSelectedDrawingId: true,
+      editDrawing: true,
+      duplicateDrawing: true,
+      deleteDrawing: true,
+      undoDrawing: true,
+      redoDrawing: true,
+      getDrawingHistory: true,
+      handleKeyDown: true,
     };
-    expect(Object.keys(members)).toHaveLength(7);
+    expect(Object.keys(members)).toHaveLength(16);
   });
 });

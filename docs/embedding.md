@@ -1,7 +1,8 @@
 # Embedding Fume (React component, headless session + DataFeed)
 
-Status: **Stage 7 "drawing foundation"** (2026-10-01, uncommitted): drawings added to the Stage 6
-React embedding and the Stage 5 headless session + DataFeed extraction. A React application embeds a Fume chart with `<FumeChartView />`
+Status: **Stage 8 "drawing UX"** (2026-10-01, uncommitted): drawing editing commands on top of the
+Stage 7 drawings, the Stage 6 React embedding and the Stage 5 headless session + DataFeed
+extraction. A React application embeds a Fume chart with `<FumeChartView />`
 (`@fume/react`); any other host drives the framework-free packages directly. The standalone app
 (`apps/web`) consumes both only through their public entry points, exactly as another application
 would. Drawings: [drawings.md](drawings.md). Not yet: indicators, layouts, packaging (compiled
@@ -72,6 +73,7 @@ re-renders only for its optional chrome.
 | `onDrawingsChange`         | no       |            | `(drawings, change)`: the user added/edited/removed one; once per edit, never per move.      |
 | `onDrawingToolChange`      | no       |            | Active tool changed (e.g. back to `cursor` after a drawing is finished).                     |
 | `onDrawingSelectionChange` | no       |            | Selected drawing id (null: none).                                                            |
+| `onDrawingHistoryChange`   | no       |            | `{ canUndo, canRedo }` changed (enable undo/redo buttons).                                   |
 
 Changing `symbol`/`assetClass` selects the new instrument (cached resolves are reused); changing
 only `timeframe` switches the timeframe on the same subscription; a re-render with the same values
@@ -102,7 +104,16 @@ view.current?.getState(); // { symbol, timeframe, bars, hasMore, streaming, foll
 view.current?.setDrawingTool('trend-line'); // or 'horizontal-line' | 'rectangle' | 'cursor'
 view.current?.getDrawingTool();
 view.current?.getDrawings(); // current set, z-order bottom first
+view.current?.selectDrawing(id); // or null
+view.current?.editDrawing(id, { style: { color: '#e2484d', lineWidth: 3 }, locked: true });
+view.current?.duplicateDrawing(); // the selected one; returns the new id
+view.current?.deleteDrawing(); // the selected one; false when locked
+view.current?.undoDrawing(); // and redoDrawing(), getDrawingHistory()
+window.addEventListener('keydown', (e) => view.current?.handleKeyDown(e)); // page-level shortcuts
 ```
+
+Edits through the handle are user actions: each is one undo step and is reported through
+`onDrawingsChange`. The undo history lives in the engine, not in React.
 
 Props stay the source of truth: an imperative switch lasts until the corresponding prop changes.
 There is no `dispose` on the handle; unmounting disposes.

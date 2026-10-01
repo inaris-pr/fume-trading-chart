@@ -24,8 +24,11 @@ import type {
   ChartTheme,
   Drawing,
   DrawingChange,
+  DrawingHistoryState,
+  DrawingPatch,
   DrawingTool,
   FollowingLatestState,
+  KeyInput,
 } from '@fume/chart';
 import type { AssetClass, StreamState, TimeframeId } from '@fume/core';
 import type { ChartSessionSettings, ChartStatus, DataFeed } from '@fume/datafeed';
@@ -70,6 +73,8 @@ export interface FumeChartViewProps {
   onDrawingToolChange?: (tool: DrawingTool) => void;
   /** The selected drawing changed (null: none). */
   onDrawingSelectionChange?: (id: string | null) => void;
+  /** Undo/redo availability changed (enable host buttons from it). */
+  onDrawingHistoryChange?: (state: DrawingHistoryState) => void;
 }
 
 /** Imperative operations that should not need a React render. */
@@ -87,6 +92,22 @@ export interface FumeChartViewHandle {
   getDrawingTool(): DrawingTool;
   /** The chart's current drawings (z-order, bottom first). */
   getDrawings(): readonly Drawing[];
+  selectDrawing(id: string | null): void;
+  getSelectedDrawingId(): string | null;
+  /** User edit of style / visibility / lock (one undo step, reported via onDrawingsChange). */
+  editDrawing(id: string, patch: DrawingPatch): boolean;
+  /** Duplicates a drawing (default: the selected one); returns the new id. */
+  duplicateDrawing(id?: string): string | null;
+  /** Deletes a drawing (default: the selected one); locked drawings are refused. */
+  deleteDrawing(id?: string): boolean;
+  undoDrawing(): boolean;
+  redoDrawing(): boolean;
+  getDrawingHistory(): DrawingHistoryState;
+  /**
+   * Forward page-level keydown events to the chart's drawing shortcuts (ignores text fields and
+   * events the chart already handled). Returns true when a shortcut ran.
+   */
+  handleKeyDown(e: KeyInput & { defaultPrevented?: boolean; preventDefault?: () => void }): boolean;
 }
 
 const ROOT_STYLE: CSSProperties = { position: 'relative', width: '100%', height: '100%' };
@@ -149,6 +170,7 @@ export const FumeChartView = forwardRef<FumeChartViewHandle, FumeChartViewProps>
         onDrawingsChange: (d, change) => latest.current.props.onDrawingsChange?.(d, change),
         onDrawingToolChange: (tool) => latest.current.props.onDrawingToolChange?.(tool),
         onDrawingSelectionChange: (id) => latest.current.props.onDrawingSelectionChange?.(id),
+        onDrawingHistoryChange: (s) => latest.current.props.onDrawingHistoryChange?.(s),
       });
       bindingRef.current = binding;
       const { symbol: s, assetClass: ac, timeframe: tf } = latest.current;
@@ -190,6 +212,16 @@ export const FumeChartView = forwardRef<FumeChartViewHandle, FumeChartViewProps>
         setDrawingTool: (tool) => bindingRef.current?.setDrawingTool(tool),
         getDrawingTool: () => bindingRef.current?.getDrawingTool() ?? 'cursor',
         getDrawings: () => bindingRef.current?.getDrawings() ?? [],
+        selectDrawing: (id) => bindingRef.current?.selectDrawing(id),
+        getSelectedDrawingId: () => bindingRef.current?.getSelectedDrawingId() ?? null,
+        editDrawing: (id, patch) => bindingRef.current?.editDrawing(id, patch) ?? false,
+        duplicateDrawing: (id) => bindingRef.current?.duplicateDrawing(id) ?? null,
+        deleteDrawing: (id) => bindingRef.current?.deleteDrawing(id) ?? false,
+        undoDrawing: () => bindingRef.current?.undoDrawing() ?? false,
+        redoDrawing: () => bindingRef.current?.redoDrawing() ?? false,
+        getDrawingHistory: () =>
+          bindingRef.current?.getDrawingHistory() ?? { canUndo: false, canRedo: false },
+        handleKeyDown: (e) => bindingRef.current?.handleKeyDown(e) ?? false,
       }),
       [],
     );

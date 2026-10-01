@@ -13,8 +13,11 @@ import {
   type ChartTheme,
   type Drawing,
   type DrawingChange,
+  type DrawingHistoryState,
+  type DrawingPatch,
   type DrawingTool,
   type FollowingLatestState,
+  type KeyInput,
 } from '@fume/chart';
 import { EMPTY_TIME_SCALE, type AssetClass, type StreamState, type TimeframeId } from '@fume/core';
 import {
@@ -56,6 +59,7 @@ export interface ChartViewBindingOptions {
   onDrawingsChange?: (drawings: readonly Drawing[], change: DrawingChange) => void;
   onDrawingToolChange?: (tool: DrawingTool) => void;
   onDrawingSelectionChange?: (id: string | null) => void;
+  onDrawingHistoryChange?: (state: DrawingHistoryState) => void;
   /** Rendering environment (tests pass a fake; default: the browser). */
   environment?: ChartEnvironment;
 }
@@ -82,6 +86,9 @@ export class ChartViewBinding {
           : {}),
         ...(options.onDrawingSelectionChange
           ? { onDrawingSelectionChange: options.onDrawingSelectionChange }
+          : {}),
+        ...(options.onDrawingHistoryChange
+          ? { onDrawingHistoryChange: options.onDrawingHistoryChange }
           : {}),
       },
       ...(options.environment ? [options.environment] : []),
@@ -151,6 +158,43 @@ export class ChartViewBinding {
 
   getDrawingTool(): DrawingTool {
     return this.chart.getDrawingTool();
+  }
+
+  // Drawing commands: straight delegation; the engine owns the rules and the history.
+  selectDrawing(id: string | null): void {
+    if (!this.disposed) this.chart.selectDrawing(id);
+  }
+
+  getSelectedDrawingId(): string | null {
+    return this.disposed ? null : this.chart.getSelectedDrawingId();
+  }
+
+  editDrawing(id: string, patch: DrawingPatch): boolean {
+    return !this.disposed && this.chart.editDrawing(id, patch);
+  }
+
+  duplicateDrawing(id?: string): string | null {
+    return this.disposed ? null : this.chart.duplicateDrawing(id);
+  }
+
+  deleteDrawing(id?: string): boolean {
+    return !this.disposed && this.chart.deleteDrawing(id);
+  }
+
+  undoDrawing(): boolean {
+    return !this.disposed && this.chart.undoDrawing();
+  }
+
+  redoDrawing(): boolean {
+    return !this.disposed && this.chart.redoDrawing();
+  }
+
+  getDrawingHistory(): DrawingHistoryState {
+    return this.disposed ? { canUndo: false, canRedo: false } : this.chart.getDrawingHistory();
+  }
+
+  handleKeyDown(e: KeyInput & { defaultPrevented?: boolean; preventDefault?: () => void }) {
+    return !this.disposed && this.chart.handleKeyDown(e);
   }
 
   /** Scrolls to the newest candle the feed has; false when it is already in view. */

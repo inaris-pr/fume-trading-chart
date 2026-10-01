@@ -36,3 +36,11 @@ export {
   type LineStyle,
 } from './drawings/model.ts';
 export type { DrawingInteractionState } from './drawings/controller.ts';
+export { applyDrawingPatch, type DrawingPatch, type DrawingStylePatch } from './drawings/model.ts';
+export { DRAWING_HISTORY_LIMIT, type DrawingHistoryState } from './drawings/history.ts';
+export {
+  drawingCommandForKey,
+  isTextEntryTarget,
+  type DrawingCommand,
+  type KeyInput,
+} from './drawings/keyboard.ts';

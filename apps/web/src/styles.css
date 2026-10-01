@@ -137,6 +137,7 @@ body,
 
 /* Below the header: the drawing toolbar rail and the chart. */
 .workspace {
+  position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -280,4 +281,198 @@ body,
   font:
     11px ui-monospace,
     monospace;
+}
+
+/* --- Stage 8 drawing UX (reference UI) --------------------------------------------------- */
+
+.drawing-tools button {
+  position: relative;
+}
+
+.drawing-tools button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.drawing-tools button:disabled:hover {
+  color: var(--muted);
+}
+
+.drawing-tools-separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+
+.drawing-count {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  min-width: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #343b48;
+  color: var(--text);
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+}
+
+.swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+/* Contextual controls of the selected drawing: a compact bar floating over the chart's top. */
+.drawing-props {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+}
+
+.drawing-props button,
+.drawing-list button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.drawing-props button:hover,
+.drawing-list button:hover {
+  color: var(--text);
+  background: #1c2028;
+}
+
+.drawing-props button[aria-pressed='true'],
+.drawing-list button[aria-pressed='true'] {
+  color: var(--text);
+  background: #232833;
+  border-color: #343b48;
+}
+
+.drawing-props button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.drawing-props select {
+  padding: 3px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.drawing-props-separator {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--border);
+}
+
+.drawing-props button:focus-visible,
+.drawing-props select:focus-visible,
+.drawing-list button:focus-visible {
+  outline: 2px solid #5b8def;
+  outline-offset: 1px;
+}
+
+.swatch-palette {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(4, auto);
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.swatch-palette button[aria-selected='true'] {
+  border-color: var(--text);
+}
+
+/* Minimal drawing list (restores hidden drawings), next to the rail. */
+.drawing-list {
+  position: absolute;
+  top: 6px;
+  left: 42px;
+  z-index: 4;
+  width: 220px;
+  max-height: 60%;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+}
+
+.drawing-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 4px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.drawing-list ul {
+  margin: 0;
+  padding: 2px 0;
+  list-style: none;
+}
+
+.drawing-list li {
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+}
+
+.drawing-list li.selected {
+  background: #1c2028;
+}
+
+.drawing-list-name {
+  flex: 1;
+  gap: 6px;
+  justify-content: flex-start !important;
+  color: var(--text) !important;
+  text-align: left;
+}
+
+.drawing-list li.is-hidden .drawing-list-name {
+  color: var(--muted) !important;
+  font-style: italic;
+}
+
+.drawing-list-empty {
+  padding: 8px 10px;
+  color: var(--muted);
 }
