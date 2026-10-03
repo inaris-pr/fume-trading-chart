@@ -8,7 +8,7 @@
  * WebSocket upgrade on /api/v1/stream, which is the stream hub's own 101 response.
  */
 import type { BarSeriesMeta, HistoricalMarketDataProvider, Instrument, UnixMs } from '@fume/core';
-import { authenticate } from './auth.ts';
+import { authenticate, type AccessSettings } from './auth.ts';
 import { loadCanonicalPage } from './canonical-history.ts';
 import { checkOrigin, corsHeaders, preflightResponse } from './cors.ts';
 import { ApiError, errorBody, reasonMessage, retryAfterSeconds, toApiError } from './errors.ts';
@@ -48,6 +48,7 @@ export type StreamForwarder = (key: string, request: Request) => Promise<Respons
 
 export interface RouterDeps {
   fumeEnv: string | undefined;
+  access?: AccessSettings;
   allowedOrigins: ReadonlySet<string>;
   registry: MarketDataRegistry;
   now: () => UnixMs;
@@ -85,7 +86,7 @@ export async function handleRequest(request: Request, deps: RouterDeps): Promise
     if (request.method === 'OPTIONS') {
       response = preflightResponse(origin);
     } else {
-      authenticate(request, deps.fumeEnv);
+      await authenticate(request, deps.fumeEnv, deps.access);
       if (isStream) {
         response = await forwardStream(url, deps, request);
       } else {

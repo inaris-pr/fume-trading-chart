@@ -22,7 +22,7 @@ lives in [docs/HANDOFF.md](docs/HANDOFF.md), design detail in the linked docs.
   API client is the only browser network code (relative `/api/v1`).
 - `packages/react` → `core`, `chart`, `datafeed`; React is a **peer** dependency. A thin binding.
 - Lower packages never import higher ones (core/chart/replay ↛ datafeed; nothing ↛ react).
-- `apps/worker` → `core` (runtime); `wrangler` is dev-only.
+- `apps/worker` → `core` (runtime), plus `jose` only in Access authentication; `wrangler` is dev-only.
 - `apps/web` → `core`, `chart`, `datafeed`, `react`, `replay`, through public entry points only.
 - Provider-specific code (payload types, hosts, header names) stays behind adapters in
   `apps/worker/src/providers/<provider>/`; only the Worker composition root imports them.

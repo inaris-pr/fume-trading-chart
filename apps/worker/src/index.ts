@@ -4,6 +4,7 @@
  * wires the provider-neutral router to that registry, and binds the provider/feed-scoped stream
  * hubs (one Durable Object instance per stream key).
  */
+import { serveFrontend } from './assets.ts';
 import { parseAllowedOrigins } from './cors.ts';
 import type { FumeEnv } from './env.ts';
 import {
@@ -58,6 +59,8 @@ function massiveFutures(env: Readonly<Record<string, unknown>>, maxCalls: number
 
 export default {
   async fetch(request: Request, env: FumeEnv): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    if (path !== '/api' && !path.startsWith('/api/')) return serveFrontend(request, env);
     const alpaca = alpacaSettingsFromEnv(env);
     const alpacaClient = alpaca.ok
       ? new AlpacaHttpClient({
@@ -75,7 +78,8 @@ export default {
     const hubs = env.FEED_HUB as DurableObjectNamespaceLike | undefined;
     const stream: StreamForwarder | null = hubs
       ? (key, req) => {
-          const headers = new Headers(req.headers);
+          // The hub needs no browser cookies or Access assertion after authentication.
+          const headers = new Headers({ Upgrade: 'websocket' });
           headers.set(STREAM_KEY_HEADER, key);
           return hubs.get(hubs.idFromName(key)).fetch(new Request(req, { headers }));
         }
@@ -115,6 +119,7 @@ export default {
 
     return handleRequest(request, {
       fumeEnv: env.FUME_ENV,
+      access: { teamDomain: env.FUME_ACCESS_TEAM_DOMAIN, audience: env.FUME_ACCESS_AUD },
       allowedOrigins: parseAllowedOrigins(env.FUME_ALLOWED_ORIGINS),
       registry,
       stream,

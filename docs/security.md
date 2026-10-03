@@ -1,5 +1,7 @@
 # Security model
 
+> Deployment-preparation branch: see [deployment preparation](deployment.md) for implemented Access authentication, asset routing, safe production configuration, and release blockers. Nothing is deployed. Older stage descriptions below are historical.
+
 ## Credentials
 
 **Stage 5:** `MASSIVE_API_KEY` (delayed futures) follows the same rules as the Alpaca keys: only in
@@ -38,11 +40,11 @@ Every HTTP request and WS upgrade passes three independent middleware steps. Non
 
 Pluggable authenticators, tried in configured order, failing closed:
 
-- **Standalone (Stage 9):** a Cloudflare Access identity. The custom domain sits behind an Access policy allowing only your email, and the Worker verifies the `Cf-Access-Jwt-Assertion` JWT (signature, issuer, audience) on every request and upgrade. `workers.dev` and preview URLs are disabled or protected the same way.
+- **Standalone (deployment preparation):** a Cloudflare Access identity. The custom domain sits behind an Access policy allowing only your email, and the Worker verifies the `Cf-Access-Jwt-Assertion` JWT (signature, issuer, audience) on every request and upgrade. `workers.dev` and preview URLs are disabled or protected the same way.
 - **External platform (designed in Stage 10, not built earlier):** one of the following, decided then with the platform's architecture in view. The origin allowlist doesn't change this choice.
   - An Access **service token** for server-to-server calls;
   - a **short-lived signed token** (JWT with audience `fume`, a lifetime of a few minutes) minted by that platform's backend with a shared signing secret stored as a Worker secret.
-- **Local (implemented in Stage 4):** `wrangler dev` bound to 127.0.0.1, with a dev-only authenticator that accepts a request only when `FUME_ENV=local` **and** the request host is loopback (`localhost`, `127.0.0.1`, `[::1]`). Any other environment or host gets `401 unauthorized` (fail closed); there is no production authenticator yet.
+- **Local (implemented in Stage 4):** `wrangler dev` bound to 127.0.0.1, with a dev-only authenticator that accepts a request only when `FUME_ENV=local` **and** the request host is loopback (`localhost`, `127.0.0.1`, `[::1]`). Any other environment or host gets `401 unauthorized` (fail closed); production now uses the Access authenticator described in [deployment.md](deployment.md).
 
 ### 3. Authorization (on the `Principal`)
 

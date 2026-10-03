@@ -24,6 +24,16 @@ try {
 }
 const credentials = localCredentialValues(root);
 const rules = [
+  {
+    name: 'Access backend configuration or assertion',
+    pattern: /FUME_ACCESS_(TEAM_DOMAIN|AUD)|Cf-Access-Jwt-Assertion|cloudflareaccess\.com/i,
+    in: /./,
+  },
+  {
+    name: 'Massive backend credential or host',
+    pattern: /MASSIVE_API_KEY|(?:api|delayed)\.massive\.com/i,
+    in: /./,
+  },
   { name: 'Alpaca host', pattern: /alpaca\.markets/i, in: /./ },
   { name: 'Alpaca credential header name', pattern: /APCA-API-(KEY-ID|SECRET-KEY)/i, in: /./ },
   { name: 'Alpaca env variable name', pattern: /ALPACA_API_(KEY_ID|SECRET_KEY)/, in: /./ },

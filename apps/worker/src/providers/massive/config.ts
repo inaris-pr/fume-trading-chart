@@ -23,11 +23,19 @@ export interface MassiveSettings {
 
 export type MassiveSettingsResult =
   | { ok: true; settings: MassiveSettings }
-  | { ok: false; reason: 'missing_credentials' | 'unexpected_host' };
+  | { ok: false; reason: 'missing_credentials' | 'unexpected_host' | 'disabled' };
 
 export function massiveSettingsFromEnv(
   env: Readonly<Record<string, unknown>>,
 ): MassiveSettingsResult {
+  // Production cloud use remains blocked until the operator has written authorization.
+  // A key alone never enables it. Local behavior is unchanged unless explicitly disabled.
+  if (
+    env.FUME_MASSIVE_ENABLED === 'false' ||
+    (env.FUME_ENV === 'production' && env.FUME_MASSIVE_ENABLED !== 'true')
+  ) {
+    return { ok: false, reason: 'disabled' };
+  }
   const str = (key: string) => (typeof env[key] === 'string' ? (env[key] as string).trim() : '');
   if (str('MASSIVE_REST_BASE_URL') !== MASSIVE_REST_BASE_URL) {
     return { ok: false, reason: 'unexpected_host' };

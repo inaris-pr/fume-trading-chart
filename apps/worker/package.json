@@ -2,15 +2,17 @@
   "name": "@fume/worker",
   "version": "0.0.0",
   "private": true,
-  "description": "Fume Cloudflare Worker: /api/v1 HTTP backend and provider adapters. Local development only in Stage 4.",
+  "description": "Fume Cloudflare Worker: authenticated API, static frontend, and feed-hub Durable Objects. Deployment preparation only.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --ip 127.0.0.1 --port 8787",
     "typecheck": "tsc -p tsconfig.json",
-    "s1": "node scripts/s1-verify.ts"
+    "s1": "node scripts/s1-verify.ts",
+    "check:bundle": "wrangler deploy --dry-run --env production --outdir .wrangler/prepared"
   },
   "dependencies": {
-    "@fume/core": "workspace:*"
+    "@fume/core": "workspace:*",
+    "jose": "^6.2.12"
   },
   "devDependencies": {
     "wrangler": "4.144.0"

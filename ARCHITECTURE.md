@@ -1,5 +1,7 @@
 # Fume architecture
 
+> This isolated deployment-preparation branch adds production Access authentication and Worker Static Assets. See [deployment.md](docs/deployment.md) for the current configuration and release blockers; older planned/local-only deployment text below is historical. Nothing is deployed.
+
 Status: **Stage 0 proposal, awaiting approval.** Facts are labeled in [docs/research.md](docs/research.md).
 
 ## 1. Shape of the system

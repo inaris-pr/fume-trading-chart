@@ -1,11 +1,9 @@
-/**
- * Provider-neutral Worker environment. Provider adapters read their own variables from the same
- * env object (e.g. providers/alpaca/config.ts); nothing here names a provider.
- */
+/** Backend-only bindings and configuration. Never serialized into frontend bootstrap data. */
 export interface FumeEnv {
-  /** "local" enables the dev-only local authenticator (docs/security.md). Anything else fails closed. */
   FUME_ENV?: string;
-  /** Comma-separated exact browser origins allowed to call the API. */
   FUME_ALLOWED_ORIGINS?: string;
+  FUME_ACCESS_TEAM_DOMAIN?: string;
+  FUME_ACCESS_AUD?: string;
+  ASSETS?: { fetch(request: Request): Promise<Response> };
   [key: string]: unknown;
 }

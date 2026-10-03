@@ -1,7 +1,5 @@
-// Fume Worker, Stage 5: LOCAL DEVELOPMENT ONLY. Do not deploy (no routes, workers.dev and
-// preview URLs disabled). Secrets are NOT configured here: ALPACA_API_KEY_ID,
-// ALPACA_API_SECRET_KEY and MASSIVE_API_KEY come from apps/worker/.dev.vars (gitignored) during
-// `wrangler dev`. The stream hubs are one Durable Object class, one instance per provider feed.
+// Deployment preparation only. No routes, domains, secrets, or cloud resources are created.
+// Default config preserves local API development; explicit production environment fails closed.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "fume-worker",
@@ -23,4 +21,37 @@
     "bindings": [{ "name": "FEED_HUB", "class_name": "FeedHubObject" }],
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FeedHubObject"] }],
+  "env": {
+    "production": {
+      "name": "fume-production",
+      "workers_dev": false,
+      "preview_urls": false,
+      "routes": [],
+      "assets": {
+        "directory": "../web/dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": true,
+      },
+      // Blank Access/origin values intentionally block access until configured.
+      // No provider credentials belong in this file.
+      "vars": {
+        "FUME_ENV": "production",
+        "FUME_ALLOWED_ORIGINS": "",
+        "FUME_ACCESS_TEAM_DOMAIN": "",
+        "FUME_ACCESS_AUD": "",
+        "FUME_MASSIVE_ENABLED": "false",
+        "ALPACA_DATA_BASE_URL": "https://data.alpaca.markets",
+        "ALPACA_TRADING_BASE_URL": "https://paper-api.alpaca.markets",
+        "ALPACA_DATA_FEED": "iex",
+        "MASSIVE_REST_BASE_URL": "https://api.massive.com",
+        "MASSIVE_FUTURES_STREAM_URL": "wss://delayed.massive.com/futures",
+      },
+      // Bindings are non-inheritable: repeat for the production environment.
+      "durable_objects": {
+        "bindings": [{ "name": "FEED_HUB", "class_name": "FeedHubObject" }],
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FeedHubObject"] }],
+    },
+  },
 }

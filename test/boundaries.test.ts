@@ -253,16 +253,18 @@ describe('Worker boundaries (Stages 4-5)', () => {
   const compositionRoot = join(workerSrc, 'index.ts');
   const files = sourceFiles(workerSrc);
 
-  test('the Worker imports only @fume/core and its own modules (no router framework, no SDKs)', () => {
+  test('the Worker permits jose only in its Access authenticator, with no provider SDKs', () => {
     for (const file of files) {
-      for (const spec of importsOf(read(file)))
-        expect(spec, file).toMatch(/^(\.\.?\/|@fume\/core$)/);
+      for (const spec of importsOf(read(file))) {
+        if (spec === 'jose') expect(file).toBe(join(workerSrc, 'auth.ts'));
+        else expect(spec, file).toMatch(/^(\.\.?\/|@fume\/core$)/);
+      }
     }
     const pkg = JSON.parse(read(join(root, 'apps/worker/package.json'))) as Record<
       string,
       Record<string, string>
     >;
-    expect(Object.keys(pkg.dependencies ?? {})).toEqual(['@fume/core']);
+    expect(Object.keys(pkg.dependencies ?? {})).toEqual(['@fume/core', 'jose']);
     expect(Object.keys(pkg.devDependencies ?? {})).toEqual(['wrangler']);
   });
 
@@ -351,14 +353,19 @@ describe('Worker boundaries (Stages 4-5)', () => {
     }
   });
 
-  test('wrangler.jsonc: local only, no secrets, only the feed-hub Durable Object binding', () => {
+  test('wrangler.jsonc: safe local and production preparation, no secrets or active routes', () => {
     const config = read(join(root, 'apps/worker/wrangler.jsonc'));
     expect(config).toMatch(/"workers_dev":\s*false/);
     expect(config).toMatch(/"preview_urls":\s*false/);
     expect(config).not.toMatch(
       /ALPACA_API_KEY_ID"\s*:|ALPACA_API_SECRET_KEY"\s*:|MASSIVE_API_KEY"\s*:/,
     );
-    expect(config).not.toMatch(/kv_namespaces|d1_databases|r2_buckets|"routes"|"route"/);
+    expect(config).not.toMatch(/kv_namespaces|d1_databases|r2_buckets|"route"/);
+    const parsed = JSON.parse(config.replace(/^\s*\/\/.*$/gm, '').replace(/,\s*([}\]])/g, '$1'));
+    expect(parsed.routes ?? []).toEqual([]);
+    expect(parsed.env.production.routes).toEqual([]);
+    expect(parsed.env.production.workers_dev).toBe(false);
+    expect(parsed.env.production.preview_urls).toBe(false);
     expect(config).toMatch(/"name":\s*"FEED_HUB",\s*"class_name":\s*"FeedHubObject"/);
     expect(config).toMatch(/"new_sqlite_classes":\s*\["FeedHubObject"\]/);
     expect(config).toMatch(/"ALPACA_DATA_FEED":\s*"iex"/);

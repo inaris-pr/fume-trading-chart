@@ -1,5 +1,7 @@
 # Fume Trading Chart
 
+> Deployment-preparation branch: see [deployment preparation](docs/deployment.md) for implemented Access authentication, asset routing, safe production configuration, and release blockers. Nothing is deployed. Older stage descriptions below are historical.
+
 A single-user, web-based trading chart with a **custom Canvas 2D chart engine**, real-time and historical market data, and **paper** trading, with orders, fills and positions drawn on the chart. It deploys to Cloudflare.
 
 Alpaca (Basic plan, IEX feed, paper trading) is the _first_ provider behind provider-neutral interfaces. The chart and domain model don't depend on it.

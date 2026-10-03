@@ -18,7 +18,8 @@
     "format:check": "prettier --check .",
     "s1": "pnpm --filter @fume/worker s1",
     "scan:secrets": "node scripts/scan-secrets.mjs",
-    "scan:bundle": "node scripts/scan-web-bundle.mjs"
+    "scan:bundle": "node scripts/scan-web-bundle.mjs",
+    "check:worker": "pnpm --filter @fume/worker check:bundle"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",
