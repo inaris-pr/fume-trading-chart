@@ -17,6 +17,9 @@ import {
   type DrawingPatch,
   type DrawingTool,
   type FollowingLatestState,
+  type IndicatorChange,
+  type IndicatorInstance,
+  type IndicatorPatch,
   type KeyInput,
 } from '@fume/chart';
 import { EMPTY_TIME_SCALE, type AssetClass, type StreamState, type TimeframeId } from '@fume/core';
@@ -60,6 +63,9 @@ export interface ChartViewBindingOptions {
   onDrawingToolChange?: (tool: DrawingTool) => void;
   onDrawingSelectionChange?: (id: string | null) => void;
   onDrawingHistoryChange?: (state: DrawingHistoryState) => void;
+  /** Initial indicator configuration (host-owned). */
+  indicators?: readonly IndicatorInstance[];
+  onIndicatorsChange?: (indicators: readonly IndicatorInstance[], change: IndicatorChange) => void;
   /** Rendering environment (tests pass a fake; default: the browser). */
   environment?: ChartEnvironment;
 }
@@ -90,6 +96,7 @@ export class ChartViewBinding {
         ...(options.onDrawingHistoryChange
           ? { onDrawingHistoryChange: options.onDrawingHistoryChange }
           : {}),
+        ...(options.onIndicatorsChange ? { onIndicatorsChange: options.onIndicatorsChange } : {}),
       },
       ...(options.environment ? [options.environment] : []),
     );
@@ -107,6 +114,7 @@ export class ChartViewBinding {
         : {}),
     });
     if (options.drawings) this.chart.setDrawings(options.drawings);
+    if (options.indicators) this.chart.setIndicators(options.indicators);
   }
 
   /**
@@ -158,6 +166,32 @@ export class ChartViewBinding {
 
   getDrawingTool(): DrawingTool {
     return this.chart.getDrawingTool();
+  }
+
+  /**
+   * Host indicator configuration. The set the chart last reported (onIndicatorsChange) is already
+   * shown, so passing it back is a no-op: a controlled `indicators` prop does not loop.
+   */
+  setIndicators(indicators: readonly IndicatorInstance[]): void {
+    if (!this.disposed && indicators !== this.chart.getIndicators())
+      this.chart.setIndicators(indicators);
+  }
+
+  getIndicators(): readonly IndicatorInstance[] {
+    return this.chart.getIndicators();
+  }
+
+  // Indicator commands: straight delegation; calculation and rules live in the chart engine.
+  addIndicator(type: string, options?: IndicatorPatch): string | null {
+    return this.disposed ? null : this.chart.addIndicator(type, options);
+  }
+
+  updateIndicator(id: string, patch: IndicatorPatch): boolean {
+    return !this.disposed && this.chart.updateIndicator(id, patch);
+  }
+
+  removeIndicator(id: string): boolean {
+    return !this.disposed && this.chart.removeIndicator(id);
   }
 
   // Drawing commands: straight delegation; the engine owns the rules and the history.

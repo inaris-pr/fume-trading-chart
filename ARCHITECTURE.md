@@ -1,26 +1,29 @@
 # Fume architecture
 
-Status: **Stage 0 proposal, awaiting approval.** Facts are labeled in [docs/research.md](docs/research.md).
+Status: **describes the system as built through Stage 9** (2026-10-01; current stage and next
+action: [docs/HANDOFF.md](docs/HANDOFF.md)). Parts that are planned but not built are labelled
+**planned**. Provider facts are labeled in [docs/research.md](docs/research.md).
 
 ## 1. Shape of the system
 
 ```
-Browser (single user)                          Cloudflare                                 Alpaca
-┌──────────────────────────────┐   HTTPS   ┌──────────────────────────────────────┐   HTTPS   ┌──────────────┐
-│ apps/web                     │──────────▶│ apps/worker  (one Worker)            │──────────▶│ Trading API  │
-│  ├─ @fume/chart (Canvas)     │  /api/v1  │  ├─ static assets (apps/web build)   │           │ (paper)      │
-│  ├─ order panel              │           │  ├─ HTTP API: history, snapshot,     │──────────▶│ Data API     │
-│  └─ FumeClient (HTTP + WS)   │           │  │   orders, cancel, close           │           │ (IEX)        │
-│      uses @fume/core         │   WSS     │  └─ StreamHub Durable Object (x1)    │   WSS     ├──────────────┤
-│                              │◀─────────▶│      ├─ fan-out to N browser sockets │◀─────────▶│ data stream  │
-└──────────────────────────────┘ /api/v1/  │      ├─ ONE upstream data socket     │           │ (v2/iex)     │
-                                   stream  │      └─ ONE upstream trade_updates   │◀─────────▶│ trade stream │
-                                           └──────────────────────────────────────┘           └──────────────┘
+Browser (single user, apps/web)                     Cloudflare Worker (apps/worker, local wrangler dev)
+┌───────────────────────────────────────┐  HTTP    ┌──────────────────────────────────────────────┐
+│ @fume/react  <FumeChartView />         │ /api/v1  │ router: origin check → local auth → validate │
+│  ├─ @fume/chart (Canvas engine:        │─────────▶│ provider registry (per asset class)          │──▶ Alpaca IEX REST
+│  │   candles, drawings, indicators)    │          │   equities/ETFs: history                     │    (history)
+│  │   └─ @fume/indicators (pure math)   │   WS     │   futures: history + delayed stream          │──▶ Massive REST
+│  └─ @fume/datafeed (ChartSession,      │◀────────▶│ /api/v1/stream → FeedHubObject (Durable      │◀─▶ Massive delayed
+│      FumeApiDataFeed / ReplayDataFeed) │ /stream  │   Object, one per feed key, ONE upstream)    │    WebSocket
+└───────────────────────────────────────┘          └──────────────────────────────────────────────┘
 ```
 
+**Planned (not built):** paper trading through Alpaca's Trading API (order panel, positions,
+`trade_updates`), production deployment behind Cloudflare Access.
+
 - **The browser only talks to Fume.** Alpaca credentials exist only in Worker secrets.
-- **Alpaca is authoritative** for orders, fills, positions, buying power and account state. Fume holds no persisted trading state.
-- **Provider adapters sit at the boundary.** Alpaca payloads are converted into `@fume/core` types inside `apps/worker/src/providers/alpaca/` and nowhere else.
+- **Provider adapters sit at the boundary.** Provider payloads are converted into `@fume/core` types inside `apps/worker/src/providers/<provider>/` (`alpaca`, `massive`) and nowhere else.
+- **Planned:** Alpaca will be authoritative for orders, fills, positions, buying power and account state; Fume will hold no persisted trading state.
 
 ## 2. Recommended stack
 
@@ -32,7 +35,7 @@ Browser (single user)                          Cloudflare                       
 | Frontend build         | Vite                                                                                                                                                                                                   | Fast dev server, minimal config, first-class TS.                                                                                                                     |
 | App UI shell           | **React + TypeScript (Vite), decided in Stage 0.** The chart engine stays framework-independent                                                                                                        | See §2.1.                                                                                                                                                            |
 | Backend                | One Cloudflare Worker with a small hand-written router                                                                                                                                                 | About ten routes. A router library isn't needed yet; Hono is a fine fallback if routing grows.                                                                       |
-| Real-time coordination | **One Durable Object class, `StreamHub`, one instance: CONDITIONAL** on spike S3 + cost/lifecycle validation                                                                                           | See §6.                                                                                                                                                              |
+| Real-time coordination | **One Durable Object class, `FeedHubObject`, one instance per feed key** (approved after spike S3; §6, §6.1)                                                                                           | One upstream per provider feed/account, shared by every browser tab.                                                                                                 |
 | Storage                | **None** (no D1, KV or R2)                                                                                                                                                                             | See §7.                                                                                                                                                              |
 | Validation             | Hand-written validators in `@fume/core` for the few request shapes                                                                                                                                     | Three request bodies don't justify zod. Revisit if the contract grows.                                                                                               |
 | Tests                  | Vitest 4.1.x (see §9.2). Worker code is tested in Node's Fetch API with injected `fetch` (Stage 4); `@cloudflare/vitest-pool-workers` only if Stage 5 needs DO tests. Playwright only for Stage 11 E2E | Same test runner everywhere. Deterministic pure-function tests make up most of the suite.                                                                            |
@@ -45,7 +48,7 @@ Browser (single user)                          Cloudflare                       
 
 **Why React for the shell and not plain TypeScript:**
 
-- The order panel, positions, open-order list, connection status and feed label are all reactive views of the same fast-changing trading projection. In plain TS we would hand-write a small view/diff layer. That's exactly the kind of custom infrastructure to avoid.
+- The (planned) order panel, positions and open-order list, plus today's connection status and feed label, are reactive views of fast-changing state. In plain TS we would hand-write a small view/diff layer. That's exactly the kind of custom infrastructure to avoid.
 - Deciding now avoids rewriting the Stage 1–5 toolbar and status UI in Stage 6.
 - React is the most likely integration target for "another frontend consumes Fume". The package boundary means a non-React consumer still uses `@fume/chart` directly.
 
@@ -53,7 +56,7 @@ Browser (single user)                          Cloudflare                       
 
 - Dependencies: `react`, `react-dom`, `@vitejs/plugin-react`. No router, no state library, no UI kit, no CSS framework.
 - React never renders the chart. `<FumeChartView>` (`@fume/react`, Stage 6) owns a `<div>`, creates `FumeChart` + `ChartSession` in an effect, forwards props into imperative calls and disposes both on unmount. React re-renders never touch the Canvas.
-- Market and trading state live in framework-free stores in `@fume/core` (pure reducers plus a subscribe function). React reads them with `useSyncExternalStore`. The high-frequency trade path goes store → chart directly, bypassing React.
+- Market data flows `DataFeed` → `ChartSession` (`@fume/datafeed`) → `FumeChart` directly, bypassing React; React only receives status callbacks. Drawing and indicator state live in the chart engine. (No framework-free state stores or `useSyncExternalStore` exist yet; trading state, when built, is planned to follow the same pattern.)
 - The React wrapper for external consumers was extracted in Stage 6 as `@fume/react` (`<FumeChartView />`, docs/embedding.md); `apps/web` consumes it like any other host.
 
 **Alternative rejected:** plain TypeScript for everything. It has fewer dependencies, but it means building our own reactive UI plumbing for the trading panel, and it gives no integration advantage.
@@ -66,25 +69,28 @@ fume-trading-chart/
 │  ├─ core/      @fume/core: domain types, provider ports and the pure logic (sessions,
 │  │             time scale, canonical + live candle aggregation, EventTime; later the order
 │  │             state machine and P&L). No DOM, no provider code.
-│  ├─ chart/     @fume/chart: Canvas chart engine (Stage 1). Depends on nothing provider-specific.
+│  ├─ chart/     @fume/chart: Canvas chart engine: panes, candles, drawings, indicator panes and
+│  │             overlays, crosshair. Provider-neutral.
+│  ├─ indicators/ @fume/indicators: pure indicator definitions, schema, incremental calculations
+│  │             (Stage 9, docs/indicators.md). No dependencies.
 │  ├─ replay/    @fume/replay: deterministic ReplayMarketDataProvider (Stage 3). Offline.
 │  ├─ datafeed/  @fume/datafeed: headless ChartSession + DataFeed contract, FumeApiDataFeed
 │  │             (HTTP + one multiplexed stream per hub), ReplayDataFeed (docs/embedding.md).
 │  └─ react/     @fume/react: <FumeChartView /> React binding (React is a peer dependency).
 ├─ apps/
 │  ├─ web/       Vite + React shell: <FumeChartView /> from @fume/react, app chrome only
-│  └─ worker/    Cloudflare Worker + StreamHub DO + provider adapters (Stage 4+)
-│     └─ src/providers/{alpaca,replay}/
+│  └─ worker/    Cloudflare Worker: router, registry, FeedHubObject DO, provider adapters
+│     └─ src/providers/{alpaca,massive}/, src/hub/
 ├─ docs/         contracts, designs, research, roadmap
 └─ ARCHITECTURE.md, README.md, .env.example
 ```
-
-Only `packages/core` exists after Stage 0. Other folders are created in the stage that needs them.
 
 **Dependency rules.** Violating these fails review:
 
 - `core` → nothing.
 - `chart` → `core`, **type-only** (approved at Stage 1 review, 2026-09-29). `@fume/chart` may `import type` canonical domain contracts from `@fume/core`, such as `Bar`, `TimeScaleMapping` and the formatter/domain types, so the chart consumes the Stage 0 model instead of a second candle model. It must **not** gain a runtime dependency on `@fume/core`: no value imports, and `@fume/core` stays a `devDependency` of the chart package, used only for type resolution. Changing this needs an explicit architecture review. Enforced by `test/boundaries.test.ts`.
+- `chart` → `indicators` (runtime, Stage 9): the only package that imports `@fume/indicators`.
+- `indicators` → nothing (no dependencies at all; pure TypeScript). Core, replay and datafeed never import it.
 - `replay` → `core` (runtime). A provider adapter; it implements the core `MarketDataProvider` port. Core and chart never import it.
 - `datafeed` → `core`, `replay` (runtime), `chart` (**type-only**). Framework-free and provider-neutral; the only network code is its Fume API client (`fetch`) and stream connection (`WebSocket`), with a configurable base URL, auth hook and socket factory. Core, chart and replay never import it.
 - `react` → `core`, `chart`, `datafeed` (runtime); `react` is a **peer** dependency. A thin binding: no provider code, no network calls, no candle/session logic of its own. Core, chart, replay and datafeed never import it.
@@ -98,15 +104,17 @@ The engine is one class per chart instance. It is fed data and reports user inte
 
 **The chart engine owns:**
 
-- Canvas setup: device-pixel-ratio scaling, resize via `ResizeObserver`, and layering (a static candle layer, a drawing layer and an overlay/crosshair layer).
+- Canvas setup: device-pixel-ratio scaling, resize via `ResizeObserver`, and layering (a static layer with every pane, a drawing layer and an overlay/crosshair layer).
+- Panes (Stage 9): the main price pane plus zero or more indicator panes stacked above one shared time axis, each with its own vertical scale ([docs/indicators.md](docs/indicators.md)).
 - The viewport model: slot spacing, right offset, visible logical slot range, price range, auto-scale on or off.
 - Coordinate transforms: slot ↔ x and price ↔ y. These are pure and unit-tested. Time ↔ slot goes through the injected **time-scale mapping** (below). The public `ChartCoordinates` (time/price ↔ x/y, Stage 7) is what drawings and future overlays use.
 - Rendering bars at their slot positions. Empty slots stay empty, and session separators are drawn where the mapping reports boundaries.
 - Rendering of the grid, candles (body and wick), price scale, time scale, crosshair, OHLC legend, and current-price line and label.
-- Rendering of **generic overlays** the app supplies: `HorizontalLine {price, label, style}` and `Marker {time, price, shape, label}`. Trading visuals are built from these.
-- Interaction: drag-pan, wheel/trackpad zoom around the cursor, price-scale drag to rescale, double-click to reset auto-scale, keyboard basics.
-- Drawings (Stage 7, [docs/drawings.md](docs/drawings.md)): the drawing model, tool state machine, hit-testing and rendering. The host owns persistence.
-- Events: `visibleRangeChanged`, `crosshairMoved`, `needsOlderData` (the left edge is near the first loaded bar).
+- Drawings (Stages 7–8, [docs/drawings.md](docs/drawings.md)): model, tool state machine, hit-testing, editing, undo/redo, rendering. The host owns persistence.
+- Indicators (Stage 9, [docs/indicators.md](docs/indicators.md)): runtime state, incremental recalculation, panes, scaling, rendering, legend. Definitions and math live in `@fume/indicators`; the host owns persistence.
+- Interaction: drag-pan, wheel/trackpad zoom around the cursor, price-scale drag to rescale, double-click to reset auto-scale, drawing tools and drawing keyboard shortcuts.
+- Events (callbacks): `onNeedsOlderData` (the left edge is near the first loaded bar), `onFollowingLatestChange`, the drawing callbacks and `onIndicatorsChange`. There are **no** `visibleRangeChanged` / `crosshairMoved` events; the view and crosshair are readable through getters (`getView`, `getCrosshair`, `getLastFrame`, `getCoordinates`).
+- **Planned, not built:** generic app-supplied overlays for trading visuals (order/position lines, execution markers); they are expected to reuse `ChartCoordinates` and the drawing/indicator layer patterns.
 - Formatting, which it delegates to injected `formatPrice(p)` and `formatTime(t, granularity)` functions built from `Instrument.priceFormat` and `session.timezone`.
 
 **The chart engine must NOT own:**
@@ -114,7 +122,7 @@ The engine is one class per chart instance. It is fed data and reports user inte
 - Networking, WebSockets, providers or retry logic.
 - Candle aggregation or live-bar construction (that's `@fume/core`; the chart only receives `setBars`, `upsertBars` and `prependBars`).
 - Session calendars (it receives a `TimeScaleMapping`).
-- Trading state, order logic or P&L math (the app computes these and passes lines and markers).
+- Trading state, order logic or P&L math (planned: the app computes these and passes lines and markers).
 - Symbol semantics ("SPY", "shares", "$"), market hours, time zones or holidays beyond the formatter it's given.
 - Any global state. Two charts on one page must not interfere.
 
@@ -146,7 +154,7 @@ Rules the mapping implements:
 - **Scheduled closed time is compressed:** nights, weekends, holidays, futures maintenance breaks and (in regular mode) extended hours. It comes from `MarketSession.windows`, which can cross midnight and contain several windows per session.
 - **Time inside an open window is linear, in slots that match the canonical session-aligned buckets** (market-data.md). A window's last slot may be shorter (1h: 15:30–16:00), but it's still one slot. A slot with no bar is a **visible, genuine data gap**. That's how missing data during an active session stays distinguishable from a scheduled closure.
 - **Daily timeframe:** one slot per `sessionDate`.
-- **Fallback:** if the calendar is unavailable, the mapping degrades to "one slot per loaded bar" (bar-index mode) and the UI shows that session data is unavailable.
+- **No calendar, no axis:** a "bar-index mode" fallback was planned but is **not implemented**. Without resolved sessions the placeholder `EMPTY_TIME_SCALE` maps nothing and no bars are shown; the DataFeed always supplies sessions (a weekly futures schedule fills dates the provider schedule does not cover).
 
 **Implementation plan:**
 
@@ -160,15 +168,15 @@ Nothing in the chart assumes that bar _i_ sits at slot _i_.
 
 A per-user option to also compress empty in-session slots is **not** in the MVP. It could be added later without changing the interface, and would help thin extended-hours IEX data.
 
-### 4.2 Interaction layer (Stage 2, approved)
+### 4.2 Layers and interaction (Stage 2, extended in Stages 7 and 9)
 
 **Three canvases per chart** (two until Stage 7). All are owned by `FumeChart`, sized together from the same backing-store computation (DPR-correct), and removed by `destroy()` together with every listener.
 
-| Layer                   | Draws                                                       | Repainted when                                                                     |
-| ----------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Main canvas             | Grid, candles, axes, session separators, last price         | Data, view, price scale or size change                                             |
-| Drawing canvas          | User drawings, hover, handles, unfinished-drawing preview   | After each main repaint, and on drawing/selection/hover changes (no frame rebuild) |
-| Overlay canvas (on top) | Crosshair lines, crosshair price/time readouts, OHLC legend | Every pointer move (no frame rebuild), and after each main repaint                 |
+| Layer                   | Draws                                                                                      | Repainted when                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| Main canvas             | Every pane: grid, candles, price-overlay and pane indicators, axes, separators, last price | Data, view, price scale, size or indicator change                                    |
+| Drawing canvas          | User drawings, hover, handles, unfinished-drawing preview                                  | After each main repaint, and on drawing/selection/hover changes (no frame rebuild)   |
+| Overlay canvas (on top) | Crosshair lines and readouts (across panes), OHLC and indicator legends                    | Every pointer move (no frame rebuild, no recalculation), and after each main repaint |
 
 The overlay receives all pointer, wheel, double-click and key events (drawings first: docs/drawings.md); the main and drawing canvases have `pointer-events: none`.
 
@@ -199,13 +207,13 @@ The overlay receives all pointer, wheel, double-click and key events (drawings f
 | Symbol or timeframe switch (`setData`) | Reset to AUTO                                                      |
 | Double-click on the price axis         | Reset to AUTO                                                      |
 
-### 4.3 Live data path (Stage 3, replay)
+### 4.3 Live data path (Stages 3 and 5)
 
 ```
-MarketDataProvider (replay now, Alpaca in Stage 4/5)
-  │ openStream → MarketEvent[] (trade, bar final/revised/provisional, status)
+DataFeed.subscribe (ReplayDataFeed, or FumeApiDataFeed → /api/v1/stream hub)
+  │ MarketEvent[] (trade, 1s/1m bar final/revised/provisional, status)
   ▼
-LiveChartController (apps/web, framework-free)        getBars / getSessions (1m history)
+ChartSession (@fume/datafeed, framework-free)         DataFeed.getBars / getSessions (1m seed)
   │ subscribe + buffer → load history → applyBufferedHandoff → live
   ▼
 LiveCandleAggregator (@fume/core, pure)
@@ -228,32 +236,32 @@ FumeChart.upsertBars / setData / prependBars (@fume/chart)
 | `prependBars(bars, { hasMore?, timeScale? })` | Older history. Bars are placed by time-scale slot and the view is anchored to the latest slot, so visible x positions do not change; an optional wider `timeScale` re-slots everything under the same anchor. Completes a pending older-data request.                                                                                                                         |
 | `onNeedsOlderData({ before })` option         | Fires once after a main repaint when the left edge of the view is within half a screen (≥ 10 slots) of the oldest bar. State then stays `pending` until `prependBars` (→ `idle`, or `exhausted` with `hasMore: false`) or `resolveOlderDataRequest(hasMore)`. A resolve without bars does not re-trigger immediately (no request storms); the next interaction may ask again. |
 
-### 4.5 Historical data path (Stage 4, Alpaca IEX, local only)
+### 4.5 Historical data path (Stage 4; futures added in Stage 5)
 
 ```
-Browser  ?source=api                        Worker (wrangler dev, 127.0.0.1:8787)            Alpaca
-HistoricalChartController ──/api/v1──▶ router: origin → local auth → validate            data API  (bars, feed=iex)
-  FumeHttpClient (relative URLs)        loadCanonicalPage (provider-neutral)  ──HTTPS──▶  paper API (assets, calendar)
-  chart.setData / prependBars           └ core: selectBaseInterval + buildCanonicalBars
+Browser  ?source=api                        Worker (wrangler dev, 127.0.0.1:8787)            Providers
+ChartSession + FumeApiDataFeed ──/api/v1──▶ router: origin → local auth → validate    Alpaca data/paper API (equities)
+  (relative URLs, @fume/datafeed)   loadCanonicalPage (provider-neutral)  ──HTTPS──▶  Massive REST (futures)
+  chart.setData / prependBars       └ core: selectBaseInterval + buildCanonicalBars
 ```
 
-- **Worker layout:** `index.ts` (composition root, the only importer of `providers/alpaca`), `router.ts`, `cors.ts`, `auth.ts`, `validate.ts`, `errors.ts`, `canonical-history.ts`, `providers/alpaca/{client,config,normalize,market-data-provider,types}.ts`.
+- **Worker layout:** `index.ts` (composition root, the only importer of `providers/*`), `router.ts`, `registry.ts`, `cors.ts`, `auth.ts`, `validate.ts`, `errors.ts`, `canonical-history.ts`, `hub/` (feed hub Durable Object), `providers/alpaca/`, `providers/massive/`.
 - **Provider port:** the Alpaca adapter implements `HistoricalMarketDataProvider` (the history half of `MarketDataProvider`; no stream until Stage 5).
 - **One `/bars` request:** calendar sessions before `end` until they hold `limit` canonical slots (or the 2016 floor) → coarsest verified native interval that nests (`[1, 5, 15]` after S1) → one ranged base-bar fetch → `buildCanonicalBars` → newest `limit` candles. If the fetch was truncated, candles older than the oldest base bar are dropped (never a partial candle).
-- **Browser:** a switch clears the chart and starts a new generation (requests aborted, late responses ignored). Older pages use `end = oldest loaded start`, one in flight, then `prependBars` with a time scale rebuilt from cached sessions.
+- **Browser (`ChartSession`):** a switch starts a new generation (requests aborted, late responses ignored). Older pages use `end = oldest loaded start`, one in flight, then `prependBars` with a time scale rebuilt from cached sessions.
 - **Local dev topology:** Vite (5173) proxies `/api` to the Worker; no backend URL is compiled into the app.
 
 **Performance rule:** each frame draws only the visible bars. Updating the live bar redraws the frame, but no layout is recomputed unless the viewport changed. Updates are batched through `requestAnimationFrame`.
 
 ## 5. Frontend/backend boundary
 
-| Browser (`apps/web`)                                                                                                                                                                               | Backend (`apps/worker`)                                                         |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Rendering, interaction, form input                                                                                                                                                                 | All provider communication and credentials                                      |
-| Aggregates normalized live events (each trade, current-bar updates, official/revised minute bars) into the displayed timeframe, updating the active candle on every trade (pure `@fume/core` code) | Historical bar retrieval, paging, normalization                                 |
-| Holds a **derived projection** of trading state: streamed events applied immediately, reconciled by broker snapshots                                                                               | Validates every trading request (see [docs/security.md](docs/security.md))      |
-| Generates `clientOrderId` (the idempotency key)                                                                                                                                                    | Maps domain requests to provider calls; maps provider errors to `ProviderError` |
-| Never decides that an order filled                                                                                                                                                                 | Owns the single upstream stream connections (StreamHub)                         |
+| Browser (`apps/web`)                                                                                                                                                                               | Backend (`apps/worker`)                                                                 |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Rendering, interaction, form input                                                                                                                                                                 | All provider communication and credentials                                              |
+| Aggregates normalized live events (each trade, current-bar updates, official/revised minute bars) into the displayed timeframe, updating the active candle on every trade (pure `@fume/core` code) | Historical bar retrieval, paging, normalization                                         |
+| **Planned:** holds a derived projection of trading state (streamed events applied immediately, reconciled by broker snapshots)                                                                     | **Planned:** validates every trading request (see [docs/security.md](docs/security.md)) |
+| **Planned:** generates `clientOrderId` (the idempotency key); never decides that an order filled                                                                                                   | Maps domain requests to provider calls; maps provider errors to `ProviderError`         |
+| Computes drawings and indicators locally (`@fume/chart`, `@fume/indicators`)                                                                                                                       | Owns the single upstream stream connection per feed (`FeedHubObject`)                   |
 
 Contracts: [docs/http-api.md](docs/http-api.md) and [docs/websocket-api.md](docs/websocket-api.md), both versioned under `/api/v1`.
 
@@ -330,7 +338,7 @@ fits the Free-plan duration allowance for the tested patterns.
 9. The two observed minute-count shortfalls (S3) remain unresolved and belong to S4.
 10. Their cause is **not** known and must not be described as known.
 
-### 6.1 Multi-provider routing and feed-scoped stream hubs (Stage 5, implemented 2026-09-30, uncommitted)
+### 6.1 Multi-provider routing and feed-scoped stream hubs (Stage 5, merged)
 
 **Routing (Worker, provider-neutral).** `apps/worker/src/registry.ts` registers one market-data
 FEED per asset class; only the composition root (`src/index.ts`) names providers:
@@ -371,10 +379,11 @@ browser tabs --ws /api/v1/stream?key=futures-delayed--> Worker (origin + auth) -
   trades deliver `bar` events with `interval: '1s'` (provisional) and `'1m'` (final); consumers
   never assume trade-level data.
 
-**Client.** `apps/web/src/api/stream-client.ts` connects only to the page's own
-`/api/v1/stream`; `HistoricalChartController` does the documented handoff (history + 1m seed +
-buffered events -> `LiveCandleAggregator`) and re-fetches the tail after reconnects, sequence gaps
-and hub restarts. Delay is shown from `DataFeedInfo.delayMs` ("Delayed ~10m"), never "live".
+**Client.** `@fume/datafeed`'s `FumeApiDataFeed` keeps one multiplexed `StreamConnection` per
+hub key on the page's own `/api/v1/stream`; `ChartSession` does the documented handoff (history +
+1m seed + buffered events -> `LiveCandleAggregator`) and re-fetches the tail after reconnects,
+sequence gaps and hub restarts ([docs/embedding.md](docs/embedding.md)). Delay is shown from
+`DataFeedInfo.delayMs` ("Delayed ~10m"), never "live".
 
 **Not in this build:** Alpaca streaming (equities stay history-only), deployment (local
 `wrangler dev` only; Durable Objects run locally).
@@ -438,13 +447,16 @@ de-duplicated), with the weekly Globex schedule only for dates the schedule does
 | Split/dividend adjustment                    | History adjustment is a backend/provider setting; the chart doesn't know about it                              |
 | Shorting is always possible / never possible | `Instrument.shortable` (tri-state) + broker rejection handling                                                 |
 
-## 9. Deployment (Cloudflare)
+## 9. Deployment (Cloudflare) — planned, not done
 
-- One Worker (`apps/worker`) serves the built frontend as static assets, `/api/v1/*`, and the WebSocket upgrade at `/api/v1/stream`, which it forwards to the StreamHub DO.
+**Nothing is deployed.** Everything runs locally (Vite + `wrangler dev`). Cloud use of Massive data is
+blocked until Massive confirms the private-backend use in writing. The plan:
+
+- One Worker (`apps/worker`) serves the built frontend as static assets, `/api/v1/*`, and the WebSocket upgrade at `/api/v1/stream`, which it forwards to the feed hub Durable Objects.
 - Secrets: `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY` via `wrangler secret put`. Non-secret config goes in `vars`.
 - **Access control:** a custom domain behind **Cloudflare Access** (one allowed email), and the Worker verifies the Access JWT. `workers.dev` and preview URLs are disabled or also protected. Nothing that can trade is ever reachable without authentication, not even on paper.
 - Observability: Workers Logs with structured JSON. Secrets and auth frames are never logged.
-- **Early preview deploy in Stage 5** (behind Access), so Cloudflare-specific WebSocket behavior is validated early instead of discovered in Stage 9.
+- A preview deploy behind Access was planned for Stage 5 but has not happened; Cloudflare-specific WebSocket behavior was validated locally and in the S3 spike only.
 
 ## 9.1 Owner decisions recorded
 
@@ -473,7 +485,9 @@ All recorded 2026-09-29.
 ## 10. Other design documents
 
 - [docs/domain-model.md](docs/domain-model.md): domain types, numeric policy, provider ports
-- [docs/drawings.md](docs/drawings.md): drawing model, coordinate model, tool state machine, hit-testing (Stage 7)
+- [docs/drawings.md](docs/drawings.md): drawing model, coordinate model, tool state machine, hit-testing, editing UX (Stages 7–8)
+- [docs/indicators.md](docs/indicators.md): indicator definitions, schema, formulas, invalidation, panes (Stage 9)
+- [docs/embedding.md](docs/embedding.md): `@fume/datafeed`, `<FumeChartView />`, embedding rules
 - [docs/http-api.md](docs/http-api.md), [docs/websocket-api.md](docs/websocket-api.md): contracts
 - [docs/market-data.md](docs/market-data.md): historical/live reconciliation and candle aggregation
 - [docs/trading-state.md](docs/trading-state.md): order/position reconciliation

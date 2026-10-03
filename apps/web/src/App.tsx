@@ -8,10 +8,12 @@ import {
   type DrawingHistoryState,
   type DrawingTool,
   type FumeChartViewHandle,
+  type IndicatorInstance,
 } from '@fume/react';
 import { DrawingList } from './DrawingList.tsx';
 import { DrawingProperties } from './DrawingProperties.tsx';
 import { DrawingToolbar } from './DrawingToolbar.tsx';
+import { IndicatorPanel } from './IndicatorPanel.tsx';
 import { feedLabel, feedTitle } from './feed-label.ts';
 import { TwoChartProof } from './TwoChartProof.tsx';
 import { EQUITY_MENU, FUTURES_MENU, FUTURES_ROOTS, optionText } from './symbol-menu.ts';
@@ -122,6 +124,7 @@ function contractInfo(instrument: Instrument): { text: string; title: string } |
 
 const NO_DRAWINGS: readonly Drawing[] = [];
 const NO_HISTORY: DrawingHistoryState = { canUndo: false, canRedo: false };
+const NO_INDICATORS: readonly IndicatorInstance[] = [];
 
 export function App() {
   const [mode] = useState(sourceMode);
@@ -140,7 +143,10 @@ export function App() {
   const [drawings, setDrawings] = useState<Record<string, readonly Drawing[]>>({});
   const [selectedDrawing, setSelectedDrawing] = useState<string | null>(null);
   const [history, setHistory] = useState<DrawingHistoryState>(NO_HISTORY);
-  const [listOpen, setListOpen] = useState(false);
+  // One side panel at a time: the drawing list or the indicators.
+  const [panel, setPanel] = useState<'drawings' | 'indicators' | null>(null);
+  // Indicator configuration is chart-wide (kept across symbols and timeframes), unlike drawings.
+  const [indicators, setIndicators] = useState<readonly IndicatorInstance[]>(NO_INDICATORS);
   useEffect(() => {
     // Drawing shortcuts also work while the focus is on the toolbar or the page (not only on the
     // chart). The engine ignores text fields and keys it already handled on its own surface.
@@ -252,16 +258,28 @@ export function App() {
           onUndo={() => viewRef.current?.undoDrawing()}
           onRedo={() => viewRef.current?.redoDrawing()}
           drawingCount={shownDrawings.length}
-          listOpen={listOpen}
-          onToggleList={() => setListOpen((open) => !open)}
+          listOpen={panel === 'drawings'}
+          onToggleList={() => setPanel((p) => (p === 'drawings' ? null : 'drawings'))}
+          indicatorCount={indicators.length}
+          indicatorsOpen={panel === 'indicators'}
+          onToggleIndicators={() => setPanel((p) => (p === 'indicators' ? null : 'indicators'))}
         />
-        {listOpen && (
+        {panel === 'indicators' && (
+          <IndicatorPanel
+            indicators={indicators}
+            onAdd={(type) => viewRef.current?.addIndicator(type)}
+            onUpdate={(id, patch) => viewRef.current?.updateIndicator(id, patch)}
+            onRemove={(id) => viewRef.current?.removeIndicator(id)}
+            onClose={() => setPanel(null)}
+          />
+        )}
+        {panel === 'drawings' && (
           <DrawingList
             drawings={shownDrawings}
             selectedId={selectedDrawing}
             onSelect={(id) => viewRef.current?.selectDrawing(id)}
             onEdit={(id, patch) => viewRef.current?.editDrawing(id, patch)}
-            onClose={() => setListOpen(false)}
+            onClose={() => setPanel(null)}
           />
         )}
         <main className="chart-area">
@@ -280,6 +298,8 @@ export function App() {
             onDrawingToolChange={setTool}
             onDrawingSelectionChange={setSelectedDrawing}
             onDrawingHistoryChange={setHistory}
+            indicators={indicators}
+            onIndicatorsChange={setIndicators}
           />
           {selected && (
             <DrawingProperties

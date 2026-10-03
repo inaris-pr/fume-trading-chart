@@ -28,6 +28,9 @@ import type {
   DrawingPatch,
   DrawingTool,
   FollowingLatestState,
+  IndicatorChange,
+  IndicatorInstance,
+  IndicatorPatch,
   KeyInput,
 } from '@fume/chart';
 import type { AssetClass, StreamState, TimeframeId } from '@fume/core';
@@ -75,6 +78,14 @@ export interface FumeChartViewProps {
   onDrawingSelectionChange?: (id: string | null) => void;
   /** Undo/redo availability changed (enable host buttons from it). */
   onDrawingHistoryChange?: (state: DrawingHistoryState) => void;
+  /**
+   * Indicator configuration (host-owned; it stays across symbol and timeframe switches while the
+   * values are recalculated from the new bars). Applied when the array identity changes; passing
+   * back the array received in onIndicatorsChange is a no-op. Omit to leave the chart's alone.
+   */
+  indicators?: readonly IndicatorInstance[];
+  /** An add / update / remove through the handle changed the indicators. */
+  onIndicatorsChange?: (indicators: readonly IndicatorInstance[], change: IndicatorChange) => void;
 }
 
 /** Imperative operations that should not need a React render. */
@@ -108,6 +119,11 @@ export interface FumeChartViewHandle {
    * events the chart already handled). Returns true when a shortcut ran.
    */
   handleKeyDown(e: KeyInput & { defaultPrevented?: boolean; preventDefault?: () => void }): boolean;
+  /** Adds an indicator (`sma`, `ema`, `volume`, `rsi`) with defaults; returns its id or null. */
+  addIndicator(type: string, options?: IndicatorPatch): string | null;
+  updateIndicator(id: string, patch: IndicatorPatch): boolean;
+  removeIndicator(id: string): boolean;
+  getIndicators(): readonly IndicatorInstance[];
 }
 
 const ROOT_STYLE: CSSProperties = { position: 'relative', width: '100%', height: '100%' };
@@ -171,6 +187,9 @@ export const FumeChartView = forwardRef<FumeChartViewHandle, FumeChartViewProps>
         onDrawingToolChange: (tool) => latest.current.props.onDrawingToolChange?.(tool),
         onDrawingSelectionChange: (id) => latest.current.props.onDrawingSelectionChange?.(id),
         onDrawingHistoryChange: (s) => latest.current.props.onDrawingHistoryChange?.(s),
+        ...(p.indicators ? { indicators: p.indicators } : {}),
+        onIndicatorsChange: (list, change) =>
+          latest.current.props.onIndicatorsChange?.(list, change),
       });
       bindingRef.current = binding;
       const { symbol: s, assetClass: ac, timeframe: tf } = latest.current;
@@ -193,6 +212,11 @@ export const FumeChartView = forwardRef<FumeChartViewHandle, FumeChartViewProps>
     useEffect(() => {
       if (drawings) bindingRef.current?.setDrawings(drawings);
     }, [drawings]);
+
+    const { indicators } = props;
+    useEffect(() => {
+      if (indicators) bindingRef.current?.setIndicators(indicators);
+    }, [indicators]);
 
     const appliedTheme = useRef(theme);
     useEffect(() => {
@@ -222,6 +246,10 @@ export const FumeChartView = forwardRef<FumeChartViewHandle, FumeChartViewProps>
         getDrawingHistory: () =>
           bindingRef.current?.getDrawingHistory() ?? { canUndo: false, canRedo: false },
         handleKeyDown: (e) => bindingRef.current?.handleKeyDown(e) ?? false,
+        addIndicator: (type, options) => bindingRef.current?.addIndicator(type, options) ?? null,
+        updateIndicator: (id, patch) => bindingRef.current?.updateIndicator(id, patch) ?? false,
+        removeIndicator: (id) => bindingRef.current?.removeIndicator(id) ?? false,
+        getIndicators: () => bindingRef.current?.getIndicators() ?? [],
       }),
       [],
     );

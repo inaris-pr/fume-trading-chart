@@ -10,6 +10,9 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
   },
+  "dependencies": {
+    "@fume/indicators": "workspace:*"
+  },
   "devDependencies": {
     "@fume/core": "workspace:*"
   }

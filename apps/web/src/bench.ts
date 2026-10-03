@@ -66,6 +66,10 @@ export async function runBenchmark(root: HTMLElement): Promise<void> {
   };
   const render: string[] = [];
   const live: string[] = [];
+  const withIndicators: string[] = [];
+  const addIndicators = (chart: FumeChart) => {
+    for (const type of ['sma', 'ema', 'volume', 'rsi']) chart.addIndicator(type);
+  };
 
   // 1. Rendering on 1k / 10k / all 1m bars.
   for (const size of [1_000, 10_000, Number.POSITIVE_INFINITY]) {
@@ -150,6 +154,66 @@ export async function runBenchmark(root: HTMLElement): Promise<void> {
     await tick();
   }
 
+  // 3. The same paths with SMA 20, EMA 20, Volume and RSI 14 (two overlays, two panes).
+  {
+    // setData + first render (which calculates every indicator over all bars), measured in
+    // alternating pairs with and without indicators so JIT/GC noise hits both alike.
+    const firstRender = async (indicators: boolean) => {
+      const c = new FumeChart(stage, { ...common, timeScale: mapping('1m') }, benchEnvironment);
+      if (indicators) addIndicators(c);
+      await tick();
+      const t = performance.now();
+      c.setData({ ...common, bars: allMinutes, timeScale: mapping('1m') });
+      c.renderAll();
+      const ms = performance.now() - t;
+      c.destroy();
+      await tick();
+      return ms;
+    };
+    const plain: number[] = [];
+    const calc: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      plain.push(await firstRender(false));
+      calc.push(await firstRender(true));
+    }
+    const mid = (v: number[]) => [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)]!;
+    const chart = new FumeChart(stage, { ...common, timeScale: mapping('1m') }, benchEnvironment);
+    addIndicators(chart);
+    await tick();
+    chart.setData({ ...common, bars: allMinutes, timeScale: mapping('1m') });
+    chart.renderAll();
+    const firstMs = mid(calc);
+    const plainMs = mid(plain);
+    const full = median(() => chart.renderAll());
+    const overlayCanvas = stage.querySelectorAll('canvas')[1]!;
+    const rect = overlayCanvas.getBoundingClientRect();
+    overlayCanvas.dispatchEvent(
+      new PointerEvent('pointermove', {
+        clientX: rect.left + rect.width * 0.5,
+        clientY: rect.top + rect.height * 0.3,
+        pointerId: 1,
+      }),
+    );
+    const overlay = median(() => chart.renderOverlayOnly());
+    withIndicators.push(
+      `${String(allMinutes.length).padEnd(7)} setData + first render: without ${plainMs.toFixed(1)} ms, with indicators (full calc) ${firstMs.toFixed(1)} ms (median of 5) | full ${full.toFixed(2)} ms | overlay ${overlay.toFixed(2)} ms`,
+    );
+    // Live: suffix invalidation, so each update recomputes only the last position.
+    const last = allMinutes.at(-1)!;
+    const next = mapping('1m').slotStart(mapping('1m').toSlot(last.start)! + 1);
+    let close = last.close;
+    const liveMs = median(() => {
+      close = Math.round((close + 0.01) * 100) / 100;
+      chart.upsertBars([{ ...last, start: next, close, high: Math.max(last.high, close) }]);
+      chart.render();
+    }, 400);
+    withIndicators.push(
+      `1m  history ${String(allMinutes.length).padStart(6)} bars | live bar upsert+recalc+repaint ${liveMs.toFixed(3)} ms`,
+    );
+    chart.destroy();
+    await tick();
+  }
+
   const environment = {
     userAgent: navigator.userAgent,
     devicePixelRatio: window.devicePixelRatio,
@@ -164,5 +228,8 @@ export async function runBenchmark(root: HTMLElement): Promise<void> {
     '',
     'LIVE (per trade, median)',
     ...live,
+    '',
+    'INDICATORS (SMA 20, EMA 20, Volume, RSI 14)',
+    ...withIndicators,
   ].join('\n');
 }

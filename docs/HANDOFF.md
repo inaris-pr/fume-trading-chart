@@ -6,11 +6,13 @@ this file) is the source of truth; do not reconstruct decisions from memory.
 
 ## Current status (2026-10-01)
 
-- **Branch:** `stage-8/drawing-ux` (local only), created from `main`.
-- **`main`:** `a4e3926542cffc4fe1f11aae26fd5ed96298857d` (Stage 7 squash merge, PR #7).
-- **Stage 8 — Drawing UX: IMPLEMENTED (uncommitted, local only), AWAITING OWNER REVIEW.** Style
-  editing, lock, visibility, duplicate, undo/redo, keyboard shortcuts, selection polish; contextual
-  bar, undo/redo and drawing list in the reference app ([drawings.md](drawings.md) "Drawing UX").
+- **Branch:** `stage-9/indicator-foundation` (local only), created from `main`.
+- **`main`:** `7593b0cc14af450080055c812145366fedc40119` (Stage 8 squash merge, PR #8).
+- **Stage 8 — Drawing UX: COMPLETE AND MERGED.**
+- **Stage 9 — Indicator Foundation: IMPLEMENTED (uncommitted, local only), AWAITING OWNER REVIEW.**
+  New pure package `@fume/indicators`; N stacked panes in the chart; SMA, EMA (overlays), Volume,
+  RSI (panes); incremental recalculation; reference indicator panel
+  ([indicators.md](indicators.md)). ARCHITECTURE.md corrected to describe what exists.
 - Everything runs locally (Vite + `wrangler dev`); nothing is deployed.
 
 ## Completed stages (all squash-merged into `main`)
@@ -25,6 +27,7 @@ this file) is the source of truth; do not reconstruct decisions from memory.
 | 5     | Massive delayed futures streaming, feed-scoped Durable Object hubs, `@fume/datafeed`           | `3597927`     |
 | 6     | `@fume/react` (`<FumeChartView />`), React `^18.2.0 \|\| ^19.0.0` peer; `apps/web` migrated    | `0a6831c`     |
 | 7     | Drawing foundation: drawing layer, model, coordinates, tool state machine, three drawing tools | `a4e3926`     |
+| 8     | Drawing UX: style editing, lock, visibility, duplicate, undo/redo, shortcuts, properties bar   | `7593b0c`     |
 
 **Roadmap numbering:** [roadmap.md](roadmap.md) still lists its original plan (Stage 6 paper
 trading, 7 trading on the chart, 8 recovery/hardening, 9 production deploy, …). Since Stage 6 the
@@ -53,10 +56,22 @@ session-aware compressed time, live (delayed futures) and replay data, shared st
 **Drawings** ([drawings.md](drawings.md)): dedicated drawing canvas; anchors in market coordinates
 (time + price); versioned schema (`fume.drawings` v1); hit-testing; selection; draggable handles;
 whole-drawing dragging; Delete/Backspace; Escape cancels; Trend Line, Horizontal Line, Rectangle;
-left drawing toolbar (rail) in the reference app. Stage 8: style editing (color, width, line
-style, rectangle fill + opacity), lock, show/hide, duplicate, undo/redo (engine history),
-keyboard shortcuts, contextual style bar and drawing list. Drawings live in memory per instrument
-in `apps/web` (lost on reload).
+left drawing toolbar (rail) in the reference app. Drawings live in memory per instrument in
+`apps/web` (lost on reload).
+
+**Stage 8 drawing UX** (drawings.md "Drawing UX (Stage 8)"):
+
+- Line color / width / solid-dashed-dotted editing; rectangle fill color / opacity (rgba in the
+  existing `fillColor`; schema still v1).
+- Lock / unlock; hide / restore; duplicate (5 bars later, 4% of the visible range lower).
+- Undo / redo: drawing history lives in `@fume/chart` (`drawings/history.ts`), one step per
+  completed user mutation.
+- Keyboard shortcuts (Escape, Delete/Backspace, Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y, Ctrl+D), ignored
+  in text fields; hosts may forward page keys to `handleKeyDown`.
+- Improved selection and cursor behavior (selected drawing keeps hit precedence, 3 px drag
+  threshold, locked drawings pan the chart).
+- Reference app: contextual drawing properties bar, drawing list, undo/redo buttons in the rail.
+- `@fume/react` stays a thin pass-through (handle methods delegate 1:1; no logic or history).
 
 ## Architecture in one screen
 
@@ -74,6 +89,8 @@ Worker (apps/worker): /api/v1 routes ── provider registry
 - `@fume/datafeed`: headless `ChartSession` + `DataFeed` contract; one multiplexed stream
   connection per hub key (30 s idle close).
 - `@fume/react`: thin binding; React is a peer dependency. Docs: [embedding.md](embedding.md).
+- `@fume/indicators` (Stage 9): pure indicator definitions, schema and incremental calculations; only
+  `@fume/chart` imports it. Docs: [indicators.md](indicators.md).
 - Provider details: ARCHITECTURE.md §6.1, [market-data.md](market-data.md),
   [research.md](research.md).
 
@@ -114,7 +131,9 @@ pnpm dev:api        # web + Worker; open http://localhost:5173/?source=api
 ## Quality gates (all must pass before a commit)
 
 `pnpm test` · `pnpm typecheck` · `pnpm format:check` · `pnpm scan:secrets` · `pnpm build` ·
-`pnpm scan:bundle`. Stage 8 (uncommitted): **760 tests in 52 files pass**; all gates green.
+`pnpm scan:bundle`. Baseline on `main` after Stage 8: 760 tests in 52 files. Stage 9 working tree:
+see the Stage 9 report (test count grows with the indicator suites); all gates green. (Occasional 5 s timeouts under heavy machine load are transient; rerun the affected file
+before treating them as failures.)
 
 ## Security state
 
@@ -126,27 +145,39 @@ pnpm dev:api        # web + Worker; open http://localhost:5173/?source=api
 
 ## Known limitations
 
-- No drawing persistence across reload; no multi-select; no magnet/snapping mode (time snaps to
-  bars, price is free); no touch-specific drawing UX; undo history is per chart and is cleared on a
-  symbol switch.
+- Drawings: no persistence across reload; no multi-select; no snapping/magnet (time snaps to bars,
+  price is free); no z-order editing; no Fibonacci; no touch-specific UX; undo history is per
+  chart and is cleared on a symbol switch.
 - Drawings whose anchors lie outside the loaded calendar are hidden until that history is paged in.
 - No crosshair/visible-range events on the engine API.
-- No indicators; no brokerage/order execution; no trading-platform integration.
+- Indicators: SMA, EMA, Volume, RSI only; no pane resizing/reordering/merging; no last-value axis
+  labels; no indicator persistence or undo.
+- No brokerage/order execution; no trading-platform integration.
 - Equities are history-only (no live Alpaca stream); `adjustment=raw` shows splits as price cliffs.
 - Packages export TypeScript source (no compiled builds); no cross-origin backend auth.
 
-## Current milestone: Stage 8 — Drawing UX (implemented, awaiting review)
+## Current milestone: Stage 9 — Indicator Foundation (implemented, awaiting review)
 
-Polish of the existing drawing system. Delivered scope:
+Purpose: introduce the reusable indicator architecture and a first small set of indicators,
+without coupling indicator calculations to React or the reference app. The implementation plan
+must be approved before any code; scope is refined at that point. Likely scope:
 
-- Styling controls: line color, line width, solid/dashed/dotted, rectangle fill/opacity.
-- Lock/unlock, show/hide, duplicate.
-- Undo/redo.
-- Better selection ergonomics; deletion controls; drawing object management where appropriate.
-- Keyboard shortcuts; clearer toolbar/tool-state feedback.
+- Framework-independent indicator model, lifecycle and calculation pipeline.
+- Indicator rendering layer(s); price-overlay indicators and separate-pane indicators.
+- Indicator settings; add / remove / update APIs.
+- Indicator state owned by the chart/indicator engine, not React.
+- First representative indicators to validate the architecture.
 
-Out of scope for Stage 8: indicators, Fibonacci (unless explicitly approved later), AI
-annotations, order/brokerage execution, user/database persistence, trading-platform integration.
+Out of scope until the plan is approved: AI-generated indicators, Pine Script, TradingView
+compatibility, strategy/backtesting engine, alerts, brokerage/order execution, trading-platform
+integration, cloud persistence, user accounts, marketplace/community scripts.
+
+Starting points in the code: `ChartCoordinates` (`packages/chart/src/coordinates.ts`, the public
+time/price ↔ pixel API meant for overlays and indicators), the layer pattern in `chart.ts`
+(main / drawings / overlay canvases), the frame model (`frame.ts`), and canonical candles from
+`@fume/core`. Note: ARCHITECTURE.md §4 still lists generic overlays (`HorizontalLine`, `Marker`)
+and `visibleRangeChanged` / `crosshairMoved` events from the Stage 0 plan; **none of these exist
+in the engine today**.
 
 ## Stage workflow reminder
 
@@ -157,6 +188,8 @@ start the next stage, push, open a PR or merge without explicit approval. No `Co
 ## Fresh-session checklist
 
 1. Read `CLAUDE.md`, then this file.
-2. `git status`, `git log --oneline -5` (expect `main` at `a4e3926`).
-3. Read only the docs the current task needs (for Stage 8: [drawings.md](drawings.md),
-   [embedding.md](embedding.md), ARCHITECTURE.md §4).
+2. `git status`, `git log --oneline -5` (expect `main` at `7593b0c`).
+3. For Stage 9: ARCHITECTURE.md (§4 chart engine boundary, §4.2 layers), the chart/rendering
+   code it points to, [embedding.md](embedding.md) (public `@fume/chart` / `@fume/react` surface),
+   and [drawings.md](drawings.md) only for the reusable overlay patterns (coordinates, layer,
+   framework-free controller, history).

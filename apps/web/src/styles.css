@@ -476,3 +476,49 @@ body,
   padding: 8px 10px;
   color: var(--muted);
 }
+
+/* Reference indicator panel (shares the drawing-list frame). */
+.indicator-panel {
+  width: 250px;
+}
+
+.indicator-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.indicator-add button {
+  font-size: 11px;
+  color: var(--text) !important;
+}
+
+.indicator-name {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 4px;
+  color: var(--text);
+}
+
+.indicator-panel li.is-hidden .indicator-name {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.indicator-param {
+  width: 52px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.indicator-param.invalid {
+  border-color: #6b3434;
+}

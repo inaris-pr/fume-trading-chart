@@ -16,7 +16,10 @@ lives in [docs/HANDOFF.md](docs/HANDOFF.md), design detail in the linked docs.
 ## Architecture rules (enforced by `test/boundaries.test.ts`)
 
 - `packages/core` → nothing (no DOM, no provider code).
-- `packages/chart` → `core` **type-only** (`import type`; core is a devDependency).
+- `packages/chart` → `core` **type-only** (`import type`; core is a devDependency) and
+  `indicators` (runtime).
+- `packages/indicators` → nothing (pure: no DOM, Canvas, framework, network or provider code).
+  Only the chart imports it.
 - `packages/replay` → `core`.
 - `packages/datafeed` → `core`, `replay`, `chart` (type-only). Framework-free, provider-neutral; its
   API client is the only browser network code (relative `/api/v1`).
@@ -31,6 +34,8 @@ lives in [docs/HANDOFF.md](docs/HANDOFF.md), design detail in the linked docs.
   chart renderer (lockfile guard).
 - **Drawings** are anchored in market coordinates (time + price), never pixels or bar indices;
   drawing logic lives in `@fume/chart`, never in React; the host owns persistence.
+- **Indicators**: math in `@fume/indicators`, runtime state/panes/rendering in `@fume/chart`, never
+  in React; only configuration is persisted (by the host), never computed values.
 
 ## Market data rules
 
@@ -86,6 +91,7 @@ Local dev: `pnpm dev` (replay), `pnpm dev:worker`, `pnpm dev:api` (web + Worker,
   see HANDOFF), acceptance criteria, risks and spikes
 - [docs/embedding.md](docs/embedding.md): `@fume/datafeed`, `<FumeChartView />`, embedding rules
 - [docs/drawings.md](docs/drawings.md): drawing model, coordinates, tool state machine, hit-testing
+- [docs/indicators.md](docs/indicators.md): indicator definitions, schema, formulas, invalidation, panes
 - [docs/market-data.md](docs/market-data.md): canonical candles, history, live reconciliation
 - [docs/http-api.md](docs/http-api.md): `/api/v1` contract
 - [docs/security.md](docs/security.md): credentials, origin policy, authentication

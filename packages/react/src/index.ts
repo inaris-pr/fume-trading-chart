@@ -17,5 +17,9 @@ export type {
   DrawingStyle,
   DrawingTool,
   DrawingType,
+  IndicatorChange,
+  IndicatorDefinition,
+  IndicatorInstance,
+  IndicatorPatch,
   LineStyle,
 } from '@fume/chart';

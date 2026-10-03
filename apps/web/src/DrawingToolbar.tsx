@@ -1,7 +1,8 @@
 /**
  * Reference drawing toolbar (left rail). The chart engine has no built-in drawing UI: hosts
  * provide their own and drive it through FumeChartView's handle and drawing callbacks. Tools on
- * top, then undo/redo (enabled from onDrawingHistoryChange) and the drawing list toggle.
+ * top, then undo/redo (enabled from onDrawingHistoryChange), the drawing list toggle and the
+ * indicator panel toggle.
  */
 import type { ReactNode } from 'react';
 import type { DrawingHistoryState, DrawingTool } from '@fume/react';
@@ -23,6 +24,9 @@ export function DrawingToolbar(props: {
   drawingCount: number;
   listOpen: boolean;
   onToggleList: () => void;
+  indicatorCount: number;
+  indicatorsOpen: boolean;
+  onToggleIndicators: () => void;
 }) {
   return (
     <div
@@ -75,6 +79,17 @@ export function DrawingToolbar(props: {
       >
         {Icon.list}
         {props.drawingCount > 0 && <span className="drawing-count">{props.drawingCount}</span>}
+      </button>
+      <button
+        type="button"
+        title={`Indicators (${props.indicatorCount})`}
+        aria-label={`Indicators (${props.indicatorCount})`}
+        aria-pressed={props.indicatorsOpen}
+        aria-expanded={props.indicatorsOpen}
+        onClick={props.onToggleIndicators}
+      >
+        {Icon.indicators}
+        {props.indicatorCount > 0 && <span className="drawing-count">{props.indicatorCount}</span>}
       </button>
     </div>
   );

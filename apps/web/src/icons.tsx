@@ -70,4 +70,5 @@ export const Icon = {
   ),
   trash: icon(<path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 9h6.6l.7-9M6.7 7v4.5M9.3 7v4.5" />),
   close: icon(<path d="M4 4l8 8M12 4l-8 8" />),
+  indicators: icon(<path d="M1.5 12l3.5-5 3 3 3.5-6.5 3 4" />),
 };

@@ -1,9 +1,9 @@
 # Drawings and overlays
 
-Status: **Stage 8 "drawing UX"** (2026-10-01, uncommitted) on top of the Stage 7 foundation. The
-drawing system lives in the chart engine (`packages/chart/src/drawings/`,
-`packages/chart/src/coordinates.ts`); the React wrapper only passes it through, and the reference
-app provides the visual controls. Tools: trend line, horizontal line, rectangle. Stage 8 added
+Status: **Stage 8 "drawing UX"** (merged into `main` as `7593b0c`) on top of the Stage 7
+foundation (`a4e3926`). The drawing system lives in the chart engine
+(`packages/chart/src/drawings/`, `packages/chart/src/coordinates.ts`); the React wrapper only
+passes it through, and the reference app provides the visual controls. Tools: trend line, horizontal line, rectangle. Stage 8 added
 style editing, lock, visibility, duplicate, undo/redo, keyboard shortcuts and selection polish
 (see "Drawing UX (Stage 8)"). Not yet: other tools (see "Extension points"), persistence
 (host-owned by design).

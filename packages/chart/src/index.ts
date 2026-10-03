@@ -44,3 +44,25 @@ export {
   type DrawingCommand,
   type KeyInput,
 } from './drawings/keyboard.ts';
+export type { PaneFrame, PaneScaleSpec } from './frame.ts';
+export type { PaneLayout } from './layout.ts';
+// Indicators: definitions, schema and model helpers come from @fume/indicators (docs/indicators.md);
+// the chart owns their runtime state, panes and rendering.
+export {
+  applyIndicatorPatch,
+  BUILTIN_INDICATORS,
+  createIndicator,
+  INDICATOR_DOCUMENT_FORMAT,
+  INDICATOR_SCHEMA_VERSION,
+  IndicatorSchemaError,
+  normalizeIndicator,
+  parseIndicatorDocument,
+  serializeIndicators,
+  type IndicatorChange,
+  type IndicatorDefinition,
+  type IndicatorDocument,
+  type IndicatorInstance,
+  type IndicatorParamSpec,
+  type IndicatorPatch,
+  type IndicatorStyleSpec,
+} from '@fume/indicators';

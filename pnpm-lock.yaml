@@ -69,6 +69,10 @@ importers:
         version: 4.144.0(@types/node@24.19.0)
 
   packages/chart:
+    dependencies:
+      '@fume/indicators':
+        specifier: workspace:*
+        version: link:../indicators
     devDependencies:
       '@fume/core':
         specifier: workspace:*
@@ -88,6 +92,8 @@ importers:
       '@fume/chart':
         specifier: workspace:*
         version: link:../chart
+
+  packages/indicators: {}
 
   packages/react:
     dependencies:
