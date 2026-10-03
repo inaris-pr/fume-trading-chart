@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ManualScheduler, ReplayDataset, ReplayMarketDataProvider } from '@fume/replay';
 import { FumeApiDataFeed, ReplayDataFeed } from '@fume/datafeed';
 import type { ChartStatus } from '@fume/datafeed';
-import type { Drawing } from '@fume/chart';
+import { createIndicator, type Drawing, type IndicatorInstance } from '@fume/chart';
 import { FakeEnvironment, fakeContainer } from '../../chart/test/fakes.ts';
 import { fakeFetch, FakeSocket } from '../../datafeed/test/fake-backend.ts';
 import { ChartViewBinding } from '../src/binding.ts';
@@ -227,6 +227,34 @@ describe('drawing commands delegate to the engine', () => {
     binding.dispose();
     expect(binding.undoDrawing()).toBe(false);
     expect(binding.getDrawingHistory()).toEqual({ canUndo: false, canRedo: false });
+  });
+});
+
+describe('indicators pass through to the chart engine', () => {
+  test('initial config, no-op for the reported set, user commands reported, host sets not echoed', async () => {
+    const r = replayFeed();
+    const env = new FakeEnvironment();
+    const reported: (readonly IndicatorInstance[])[] = [];
+    const initial = [createIndicator('sma', 's1')];
+    const binding = new ChartViewBinding(fakeContainer(), {
+      datafeed: r.feed,
+      environment: env,
+      indicators: initial,
+      onIndicatorsChange: (list) => reported.push(list),
+    });
+    expect(binding.getIndicators()).toBe(initial);
+    await binding.apply({ symbol: 'SPY', assetClass: 'equity', timeframe: '5m' });
+    const id = binding.addIndicator('rsi')!;
+    expect(reported).toHaveLength(1);
+    expect(binding.updateIndicator(id, { params: { period: 9 } })).toBe(true);
+    binding.setIndicators(reported.at(-1)!); // the controlled prop echoing the report: no-op
+    expect(binding.getIndicators()).toBe(reported.at(-1));
+    binding.setIndicators([]); // host replacement
+    expect(binding.getIndicators()).toEqual([]);
+    expect(reported).toHaveLength(2);
+    expect(binding.removeIndicator('s1')).toBe(false);
+    binding.dispose();
+    expect(binding.addIndicator('ema')).toBeNull();
   });
 });
 

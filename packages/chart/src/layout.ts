@@ -7,15 +7,47 @@ export interface Rect {
   height: number;
 }
 
+/** One vertically stacked pane: its plot and its own price axis to the right. */
+export interface PaneLayout {
+  plot: Rect;
+  priceAxis: Rect;
+}
+
 export interface ChartLayout {
   width: number;
   height: number;
-  /** Candles, grid and overlays. */
+  /** The MAIN price pane's plot: candles, price overlays and drawings. */
   plot: Rect;
-  /** Right-hand price scale. */
+  /** The main pane's price scale (manual price scaling happens here). */
   priceAxis: Rect;
-  /** Bottom time scale. */
+  /** Bottom time scale, shared by every pane (below the last one). */
   timeAxis: Rect;
+  /** All panes top to bottom; panes[0] is the main pane (same rects as plot / priceAxis). */
+  panes: PaneLayout[];
+  /** Union of every pane's plot: the area where the time axis, crosshair and panning apply. */
+  paneArea: Rect;
+}
+
+/** Default height of one indicator pane as a share of the panes' total height. */
+export const PANE_SHARE = 0.2;
+/** Preferred minimum / maximum indicator pane height (CSS px) while space allows. */
+export const PANE_MIN_HEIGHT = 40;
+export const PANE_MAX_HEIGHT = 160;
+/** Indicator panes together never take more than this share; the main pane keeps the rest. */
+export const PANES_MAX_SHARE = 0.5;
+
+/**
+ * Heights of [main, pane1, pane2, …] for `total` CSS px and `count` indicator panes (fixed
+ * proportions; deterministic; always summing to `total`). Each indicator pane gets PANE_SHARE of
+ * the height within [PANE_MIN_HEIGHT, PANE_MAX_HEIGHT]; when that would exceed PANES_MAX_SHARE
+ * (small charts, many panes) they shrink evenly, so the main pane always keeps at least half.
+ */
+export function paneHeights(total: number, count: number): number[] {
+  const h = Math.max(0, total);
+  if (count <= 0) return [h];
+  let pane = Math.min(PANE_MAX_HEIGHT, Math.max(PANE_MIN_HEIGHT, Math.round(h * PANE_SHARE)));
+  if (pane * count > h * PANES_MAX_SHARE) pane = Math.floor((h * PANES_MAX_SHARE) / count);
+  return [h - pane * count, ...Array<number>(count).fill(pane)];
 }
 
 export function computeLayout(
@@ -23,6 +55,7 @@ export function computeLayout(
   height: number,
   priceAxisWidth: number,
   timeAxisHeight: number,
+  indicatorPanes = 0,
 ): ChartLayout {
   const w = Math.max(0, width);
   const h = Math.max(0, height);
@@ -30,12 +63,24 @@ export function computeLayout(
   const axisH = Math.min(Math.max(0, timeAxisHeight), h);
   const plotW = w - axisW;
   const plotH = h - axisH;
+  const panes: PaneLayout[] = [];
+  let y = 0;
+  for (const paneH of paneHeights(plotH, indicatorPanes)) {
+    panes.push({
+      plot: { x: 0, y, width: plotW, height: paneH },
+      priceAxis: { x: plotW, y, width: axisW, height: paneH },
+    });
+    y += paneH;
+  }
+  const main = panes[0]!;
   return {
     width: w,
     height: h,
-    plot: { x: 0, y: 0, width: plotW, height: plotH },
-    priceAxis: { x: plotW, y: 0, width: axisW, height: plotH },
+    plot: main.plot,
+    priceAxis: main.priceAxis,
     timeAxis: { x: 0, y: plotH, width: plotW, height: axisH },
+    panes,
+    paneArea: { x: 0, y: 0, width: plotW, height: plotH },
   };
 }
 

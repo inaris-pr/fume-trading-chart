@@ -124,18 +124,33 @@ export interface CrosshairModel {
   /** Nearest slot and its center x (CSS px) — the vertical line snaps here. */
   slot: number;
   x: number;
-  /** Price at the pointer's exact y; null when no price scale exists (no visible bars). */
+  /** Pane under the pointer: 0 = main price pane, k = indicator pane k. */
+  pane: number;
+  /** Value at the pointer's exact y in that pane's scale; null when it has no scale. */
   price: number | null;
   priceText: string | null;
   /** Readout for the slot's start time, e.g. "Mon, Mar 9, 2026, 10:35"; null outside the resolved calendar. */
   timeText: string | null;
   /** Bar at that slot, or null for an empty slot (gap) or a slot beyond the data. */
   bar: Bar | null;
+  /** Position of that bar in the series (indicator values are indexed by it), or null. */
+  barIndex: number | null;
 }
 
 export function isInsidePlot(frame: Frame, x: number, y: number): boolean {
   const { plot } = frame.layout;
   return x >= plot.x && x < plot.x + plot.width && y >= plot.y && y < plot.y + plot.height;
+}
+
+/** Pane under (x, y): 0 = main, k = indicator pane k; -1 outside every pane's plot. */
+export function paneAt(frame: Frame, x: number, y: number): number {
+  const { paneArea, panes } = frame.layout;
+  if (x < paneArea.x || x >= paneArea.x + paneArea.width) return -1;
+  for (let k = 0; k < panes.length; k++) {
+    const p = panes[k]!.plot;
+    if (y >= p.y && y < p.y + p.height) return k;
+  }
+  return -1;
 }
 
 /** True over the right price axis (the region used for vertical price scaling). */
@@ -150,8 +165,9 @@ export function isInsidePriceAxis(frame: Frame, x: number, y: number): boolean {
 }
 
 /**
- * Crosshair for a pointer at (x, y) in CSS px, or null when the pointer is outside the plot
- * (over an axis or off the chart).
+ * Crosshair for a pointer at (x, y) in CSS px, or null when the pointer is outside every pane
+ * (over an axis or off the chart). The slot (vertical line) is shared by all panes; the value
+ * readout uses the scale of the pane under the pointer.
  */
 export function computeCrosshair(args: {
   frame: Frame;
@@ -162,22 +178,44 @@ export function computeCrosshair(args: {
   pointer: { x: number; y: number };
 }): CrosshairModel | null {
   const { frame, series, mapping, pointer } = args;
-  if (!isInsidePlot(frame, pointer.x, pointer.y)) return null;
+  const pane = paneAt(frame, pointer.x, pointer.y);
+  if (pane < 0) return null;
   const slot = Math.round(frame.viewport.xToSlot(pointer.x));
-  const price = frame.priceScale ? frame.priceScale.toPrice(pointer.y) : null;
+  const paneFrame = pane === 0 ? null : frame.panes[pane - 1];
+  const scale = pane === 0 ? frame.priceScale : (paneFrame?.priceScale ?? null);
+  const price = scale ? scale.toPrice(pointer.y) : null;
+  const format = paneFrame ? paneFrame.format : args.formatPrice;
   const intraday = frame.timeAxis.slotDurationMs !== null;
+  const barIndex = barIndexAtSlot(series, slot);
   return {
     pointerX: pointer.x,
     pointerY: pointer.y,
     slot,
     x: frame.viewport.slotToX(slot),
+    pane,
     price,
-    priceText: price === null ? null : args.formatPrice(price),
+    priceText: price === null ? null : format(price),
     timeText: isResolvedSlot(mapping, slot)
       ? args.formatTime(mapping.slotStart(slot), intraday ? 'datetime' : 'date')
       : null,
-    bar: barAtSlot(series, slot),
+    bar: barIndex === null ? null : (series.bars[barIndex] ?? null),
+    barIndex,
   };
+}
+
+/** Position of the bar whose slot equals `slot` exactly, or null. */
+export function barIndexAtSlot(series: IndexedSeries, slot: number): number | null {
+  const { slots } = series;
+  let lo = 0;
+  let hi = slots.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const value = slots[mid]!;
+    if (value === slot) return mid;
+    if (value < slot) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return null;
 }
 
 /** Bar whose slot equals `slot` exactly (binary search), or null for gaps / out-of-range slots. */

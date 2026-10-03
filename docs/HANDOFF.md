@@ -9,8 +9,10 @@ this file) is the source of truth; do not reconstruct decisions from memory.
 - **Branch:** `stage-9/indicator-foundation` (local only), created from `main`.
 - **`main`:** `7593b0cc14af450080055c812145366fedc40119` (Stage 8 squash merge, PR #8).
 - **Stage 8 — Drawing UX: COMPLETE AND MERGED.**
-- **Stage 9 — Indicator Foundation: defined below, NOT started.** Implementation needs an approved
-  plan first.
+- **Stage 9 — Indicator Foundation: IMPLEMENTED (uncommitted, local only), AWAITING OWNER REVIEW.**
+  New pure package `@fume/indicators`; N stacked panes in the chart; SMA, EMA (overlays), Volume,
+  RSI (panes); incremental recalculation; reference indicator panel
+  ([indicators.md](indicators.md)). ARCHITECTURE.md corrected to describe what exists.
 - Everything runs locally (Vite + `wrangler dev`); nothing is deployed.
 
 ## Completed stages (all squash-merged into `main`)
@@ -87,6 +89,8 @@ Worker (apps/worker): /api/v1 routes ── provider registry
 - `@fume/datafeed`: headless `ChartSession` + `DataFeed` contract; one multiplexed stream
   connection per hub key (30 s idle close).
 - `@fume/react`: thin binding; React is a peer dependency. Docs: [embedding.md](embedding.md).
+- `@fume/indicators` (Stage 9): pure indicator definitions, schema and incremental calculations; only
+  `@fume/chart` imports it. Docs: [indicators.md](indicators.md).
 - Provider details: ARCHITECTURE.md §6.1, [market-data.md](market-data.md),
   [research.md](research.md).
 
@@ -127,8 +131,8 @@ pnpm dev:api        # web + Worker; open http://localhost:5173/?source=api
 ## Quality gates (all must pass before a commit)
 
 `pnpm test` · `pnpm typecheck` · `pnpm format:check` · `pnpm scan:secrets` · `pnpm build` ·
-`pnpm scan:bundle`. Baseline on `main` after Stage 8: **760 tests in 52 files pass**; all gates
-green. (Occasional 5 s timeouts under heavy machine load are transient; rerun the affected file
+`pnpm scan:bundle`. Baseline on `main` after Stage 8: 760 tests in 52 files. Stage 9 working tree:
+see the Stage 9 report (test count grows with the indicator suites); all gates green. (Occasional 5 s timeouts under heavy machine load are transient; rerun the affected file
 before treating them as failures.)
 
 ## Security state
@@ -146,11 +150,13 @@ before treating them as failures.)
   chart and is cleared on a symbol switch.
 - Drawings whose anchors lie outside the loaded calendar are hidden until that history is paged in.
 - No crosshair/visible-range events on the engine API.
-- No indicators yet; no brokerage/order execution; no trading-platform integration.
+- Indicators: SMA, EMA, Volume, RSI only; no pane resizing/reordering/merging; no last-value axis
+  labels; no indicator persistence or undo.
+- No brokerage/order execution; no trading-platform integration.
 - Equities are history-only (no live Alpaca stream); `adjustment=raw` shows splits as price cliffs.
 - Packages export TypeScript source (no compiled builds); no cross-origin backend auth.
 
-## Next milestone: Stage 9 — Indicator Foundation (defined, NOT started)
+## Current milestone: Stage 9 — Indicator Foundation (implemented, awaiting review)
 
 Purpose: introduce the reusable indicator architecture and a first small set of indicators,
 without coupling indicator calculations to React or the reference app. The implementation plan

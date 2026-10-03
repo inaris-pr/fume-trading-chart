@@ -37,13 +37,19 @@ describe('@fume/chart stays framework-independent and provider-neutral', () => {
       }
     }
     const deps = { ...pkg.dependencies, ...pkg.peerDependencies, ...pkg.devDependencies };
-    expect(Object.keys(deps)).toEqual(['@fume/core']);
+    expect(Object.keys(deps).sort()).toEqual(['@fume/core', '@fume/indicators']);
   });
 
-  test('no runtime dependency on @fume/core in the manifest (ARCHITECTURE §3)', () => {
-    expect(pkg.dependencies ?? {}).toEqual({});
+  test('runtime dependency only on @fume/indicators; @fume/core is types-only (ARCHITECTURE §3)', () => {
+    expect(pkg.dependencies ?? {}).toEqual({ '@fume/indicators': 'workspace:*' });
     expect(pkg.peerDependencies ?? {}).toEqual({});
     expect(Object.keys(pkg.devDependencies ?? {})).toEqual(['@fume/core']);
+  });
+
+  test('imports only its own modules, @fume/core (types) and @fume/indicators', () => {
+    for (const file of files)
+      for (const spec of importsOf(read(file)))
+        expect(spec, file).toMatch(/^(\.\.?\/|@fume\/(core|indicators)$)/);
   });
 
   test('no value re-exports or dynamic imports of @fume/core', () => {
@@ -79,6 +85,46 @@ describe('@fume/chart stays framework-independent and provider-neutral', () => {
       for (const pattern of forbidden)
         expect(code, `${file} matches ${pattern}`).not.toMatch(pattern);
     }
+  });
+});
+
+describe('@fume/indicators stays pure (Stage 9)', () => {
+  const dir = join(root, 'packages/indicators/src');
+  const pkg = JSON.parse(read(join(root, 'packages/indicators/package.json'))) as Record<
+    string,
+    Record<string, string> | undefined
+  >;
+
+  test('no dependencies at all; imports only its own modules', () => {
+    expect(pkg.dependencies ?? {}).toEqual({});
+    expect(pkg.peerDependencies ?? {}).toEqual({});
+    expect(pkg.devDependencies ?? {}).toEqual({});
+    for (const file of sourceFiles(dir))
+      for (const spec of importsOf(read(file))) expect(spec, file).toMatch(/^\.\.?\//);
+  });
+
+  test('framework-, DOM-, Canvas- and network-free; no provider or market specifics', () => {
+    const forbidden = [
+      /\bdocument\./,
+      /\bwindow\./,
+      /\bHTMLCanvasElement\b|CanvasRenderingContext2D|getContext\(/,
+      /\bfetch\s*\(|new\s+WebSocket\s*\(|XMLHttpRequest|EventSource/,
+      /\breact\b|useState|useEffect/,
+      /alpaca|massive/i,
+      /localStorage|indexedDB/,
+    ];
+    for (const file of sourceFiles(dir)) {
+      const source = code(file);
+      for (const pattern of forbidden)
+        expect(source, `${file} matches ${pattern}`).not.toMatch(pattern);
+    }
+  });
+
+  test('nothing below the chart imports it; it imports no Fume package', () => {
+    for (const d of ['packages/core/src', 'packages/replay/src', 'packages/datafeed/src'])
+      for (const file of sourceFiles(join(root, d)))
+        for (const spec of importsOf(read(file)))
+          expect(spec, file).not.toMatch(/@fume\/indicators/);
   });
 });
 

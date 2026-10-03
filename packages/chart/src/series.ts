@@ -91,6 +91,12 @@ export interface MergeResult {
   unmapped: number;
 }
 
+/** MergeResult plus the earliest bar position whose bar changed (internal: indicator invalidation). */
+export interface MergeOutcome extends MergeResult {
+  /** Position of the first replaced/inserted/appended bar; the series length when nothing changed. */
+  firstChanged: number;
+}
+
 /**
  * Merges bars into the series by slot (i.e. by canonical start time):
  * - a bar whose slot already exists replaces it in place (O(log n), no allocation);
@@ -102,8 +108,14 @@ export function mergeIntoSeries(
   series: MutableSeries,
   bars: readonly Bar[],
   mapping: TimeScaleMapping,
-): MergeResult {
-  const result: MergeResult = { replaced: 0, appended: 0, inserted: 0, unmapped: 0 };
+): MergeOutcome {
+  const result: MergeOutcome = {
+    replaced: 0,
+    appended: 0,
+    inserted: 0,
+    unmapped: 0,
+    firstChanged: series.bars.length,
+  };
   const additions = new Map<number, Bar>();
   for (const bar of bars) {
     const slot = mapping.toSlot(bar.start);
@@ -115,6 +127,7 @@ export function mergeIntoSeries(
     if (index >= 0) {
       series.bars[index] = bar;
       result.replaced++;
+      result.firstChanged = Math.min(result.firstChanged, index);
     } else {
       additions.set(slot, bar);
     }
@@ -131,11 +144,15 @@ export function mergeIntoSeries(
       slots[series.slots.length + i] = slot;
       series.bars.push(bar);
     });
+    result.firstChanged = Math.min(result.firstChanged, series.slots.length);
     series.slots = slots;
     result.appended = added.length;
     return result;
   }
 
+  // Everything from the first inserted position on moved or changed.
+  const firstInserted = firstIndexAtOrAbove(series.slots, added[0]![0]);
+  result.firstChanged = Math.min(result.firstChanged, firstInserted);
   const merged: [number, Bar][] = series.bars.map((bar, i) => [series.slots[i]!, bar]);
   merged.push(...added);
   merged.sort((a, b) => a[0] - b[0]);
@@ -143,4 +160,9 @@ export function mergeIntoSeries(
   series.slots = Float64Array.from(merged, ([slot]) => slot);
   result.inserted = added.length;
   return result;
+}
+
+/** Number of slots below `slot` (= the position `slot` takes when inserted). */
+function firstIndexAtOrAbove(slots: Float64Array, slot: number): number {
+  return firstIndexWhere(slots, (s) => s >= slot);
 }

@@ -3,13 +3,16 @@
  * render scheduling; delegates math to pure modules and drawing to the painters.
  *
  * Layers (all DPR-correct, sized together, removed by destroy()), bottom to top:
- * - main canvas: grid, candles, axes, last price. Repainted only when data, view or size change.
+ * - main canvas: every pane (main price pane with candles and price-overlay indicators, indicator
+ *   panes below it), axes, last price. Repainted only when data, view, size or indicators change.
  * - drawing canvas: user drawings (docs/drawings.md). Repainted when the view changes or a drawing,
  *   the selection, the hover or an unfinished drawing changes; never rebuilds the candle frame.
  * - overlay canvas: crosshair, crosshair readouts, OHLC legend. Repainted on pointer moves without
  *   rebuilding the frame. It sits on top and receives all pointer, wheel and key events.
  */
 import type { Bar, PriceFormatter, TimeFormatter, TimeScaleMapping, UnixMs } from '@fume/core';
+import type { IndicatorChange, IndicatorInstance, IndicatorPatch } from '@fume/indicators';
+import { ChartIndicators, defaultIndicatorId } from './indicators/engine.ts';
 import { backingStoreSize } from './layout.ts';
 import {
   indexSeries,
@@ -19,7 +22,7 @@ import {
   type MutableSeries,
 } from './series.ts';
 import { CandleBuffer } from './geometry.ts';
-import { buildFrame, DEFAULT_FRAME_SETTINGS, type Frame } from './frame.ts';
+import { buildFrame, DEFAULT_FRAME_SETTINGS, type Frame, type PaneScaleSpec } from './frame.ts';
 import { paintFrame } from './paint.ts';
 import { paintOverlay } from './paint-overlay.ts';
 import { DEFAULT_THEME, type ChartTheme } from './theme.ts';
@@ -44,6 +47,7 @@ import {
   IDLE_DRAG,
   isInsidePlot,
   isInsidePriceAxis,
+  paneAt,
   priceDragDelta,
   type CrosshairModel,
   type DragState,
@@ -115,6 +119,14 @@ export interface FumeChartOptions {
   onDrawingHistoryChange?: (state: DrawingHistoryState) => void;
   /** Id for a drawing the user creates. Default: crypto.randomUUID(). */
   createDrawingId?: () => string;
+  /**
+   * A user command (addIndicator / updateIndicator / removeIndicator) changed the indicators.
+   * Receives the complete new configuration; not called for setIndicators(). The chart does not
+   * save indicators (docs/indicators.md).
+   */
+  onIndicatorsChange?: (indicators: readonly IndicatorInstance[], change: IndicatorChange) => void;
+  /** Id for an indicator added with addIndicator(). Default: `ind-` + crypto.randomUUID(). */
+  createIndicatorId?: () => string;
 }
 
 /** Live-follow state plus where the plot's bottom-right corner is (for placing a control). */
@@ -167,6 +179,7 @@ export class FumeChart {
   private readonly drawingCtx: CanvasRenderingContext2D;
   private readonly overlayCtx: CanvasRenderingContext2D;
   private readonly drawings: DrawingController;
+  private readonly indicators: ChartIndicators;
   private readonly candles = new CandleBuffer();
   private readonly disposers: (() => void)[] = [];
   private options: FumeChartOptions;
@@ -221,6 +234,11 @@ export class FumeChart {
       onSelectionChange: (id) => this.options.onDrawingSelectionChange?.(id),
       onHistoryChange: (state) => this.options.onDrawingHistoryChange?.(state),
       onInvalidate: () => this.invalidate('drawings'),
+    });
+    this.indicators = new ChartIndicators({
+      createId: () => this.options.createIndicatorId?.() ?? defaultIndicatorId(),
+      onChange: (list, change) => this.options.onIndicatorsChange?.(list, change),
+      onInvalidate: () => this.invalidate('main'),
     });
     const layer = {
       display: 'block',
@@ -291,7 +309,9 @@ export class FumeChart {
       return { replaced: 0, appended: 0, inserted: 0, unmapped: 0 };
     const oldLast = this.lastSlot();
     const following = this.isFollowingLatest();
-    const result = mergeIntoSeries(this.series, bars, this.options.timeScale);
+    const { firstChanged, ...result } = mergeIntoSeries(this.series, bars, this.options.timeScale);
+    // Indicators recompute only from the earliest changed bar (a live bar: one position).
+    if (firstChanged < this.series.bars.length) this.indicators.barsChangedFrom(firstChanged);
     const newLast = this.lastSlot();
     if (oldLast !== null && newLast !== null && newLast > oldLast && !following) {
       this.shiftAnchor(newLast - oldLast);
@@ -314,7 +334,9 @@ export class FumeChart {
       this.options = { ...this.options, timeScale: options.timeScale };
       this.series = toMutableSeries(indexSeries(this.series.bars, options.timeScale));
     }
-    const result = mergeIntoSeries(this.series, bars, this.options.timeScale);
+    const { firstChanged, ...result } = mergeIntoSeries(this.series, bars, this.options.timeScale);
+    // Older bars shift every position and give recursive indicators a new seed: recompute all.
+    if (firstChanged < this.series.bars.length) this.indicators.resetData();
     this.extendDataRange(bars);
     if (this.olderData === 'pending')
       this.olderData = options.hasMore === false ? 'exhausted' : 'idle';
@@ -551,6 +573,55 @@ export class FumeChart {
     return this.drawings.getHistoryState();
   }
 
+  // --- indicators (docs/indicators.md) ----------------------------------------------------------
+
+  /**
+   * Replaces the indicator configuration (host-owned data). Not reported through
+   * onIndicatorsChange. Invalid instances are left out; unchanged instances keep their values.
+   */
+  setIndicators(indicators: readonly IndicatorInstance[]): void {
+    if (this.destroyed) return;
+    this.indicators.setIndicators(indicators);
+  }
+
+  /** The current indicator configuration (replaced, never mutated). */
+  getIndicators(): readonly IndicatorInstance[] {
+    return this.indicators.getIndicators();
+  }
+
+  /**
+   * User command: adds an indicator of `type` (`sma`, `ema`, `volume`, `rsi`) with defaults
+   * overridden by `options`. Returns its id, or null for an unknown type or invalid options.
+   */
+  addIndicator(type: string, options?: IndicatorPatch): string | null {
+    if (this.destroyed) return null;
+    return this.indicators.add(type, options);
+  }
+
+  /** User command: edits params / style / visibility. False when invalid or unchanged. */
+  updateIndicator(id: string, patch: IndicatorPatch): boolean {
+    return !this.destroyed && this.indicators.update(id, patch);
+  }
+
+  /** User command: removes an indicator. */
+  removeIndicator(id: string): boolean {
+    return !this.destroyed && this.indicators.remove(id);
+  }
+
+  /**
+   * Values of a visible indicator at the bar starting at `time` (default: the latest bar), keyed
+   * by output (e.g. `{ value: 612.4 }`; null = no value yet). Null for unknown or hidden ids or a
+   * time without a bar.
+   */
+  getIndicatorValues(id: string, time?: UnixMs): Readonly<Record<string, number | null>> | null {
+    if (this.destroyed) return null;
+    const { bars } = this.series;
+    const index = time === undefined ? bars.length - 1 : barIndexAtTime(bars, time);
+    if (index < 0) return null;
+    this.indicators.sync(bars);
+    return this.indicators.valuesAt(id, index);
+  }
+
   /**
    * Drawing keyboard shortcuts (drawings/keyboard.ts). The chart calls this for keys on its own
    * surface; a host may forward page-level keydown events too. Keys in text fields/selects and
@@ -575,6 +646,7 @@ export class FumeChart {
     this.pendingFrame = 0;
     for (const dispose of this.disposers.splice(0)) dispose();
     this.drawings.dispose();
+    this.indicators.dispose();
     this.canvas.remove();
     this.drawingCanvas.remove();
     this.overlay.remove();
@@ -590,6 +662,7 @@ export class FumeChart {
     delete this.options.onDrawingToolChange;
     delete this.options.onDrawingSelectionChange;
     delete this.options.onDrawingHistoryChange;
+    delete this.options.onIndicatorsChange;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -598,6 +671,10 @@ export class FumeChart {
     const plotWidth = Math.max(0, cssWidth - Math.min(this.priceAxisWidth, cssWidth));
     if (plotWidth > 0)
       this.view = clampView(this.view, this.viewContext(plotWidth), DEFAULT_VIEW_LIMITS);
+    // Indicators catch up with the bars (only stale suffixes are recomputed).
+    this.indicators.sync(this.series.bars);
+    const indicators = this.indicators;
+    const formatPrice = this.options.formatPrice;
     const frame = buildFrame(
       {
         cssWidth,
@@ -615,10 +692,20 @@ export class FumeChart {
           priceAxisWidth: this.priceAxisWidth,
           minPriceStep: this.options.minPriceStep,
         },
+        indicators: {
+          paneCount: indicators.paneRuntimes().length,
+          overlayRange: (from, to) => indicators.overlayRange(from, to),
+          paneScale: (pane, from, to) =>
+            indicators.paneScale(pane, from, to, formatPrice) ?? NO_PANE_SCALE,
+        },
       },
       this.candles,
     );
-    paintFrame(this.ctx, frame, this.theme);
+    paintFrame(this.ctx, frame, this.theme, {
+      plots: indicators.plots(),
+      slots: this.series.slots,
+      bars: this.series.bars,
+    });
     this.lastFrame = frame;
     this.frameMapping = this.options.timeScale;
   }
@@ -662,8 +749,11 @@ export class FumeChart {
           pointer: this.pointer,
         })
       : null;
-    const latest = this.series.bars[this.series.bars.length - 1] ?? null;
+    const { bars } = this.series;
+    const latest = bars[bars.length - 1] ?? null;
     const legendBar = this.crosshair ? this.crosshair.bar : latest;
+    // Legend values are read from the indicator series; nothing is recalculated per pointer move.
+    const legendIndex = this.crosshair ? this.crosshair.barIndex : bars.length - 1;
     paintOverlay(
       this.overlayCtx,
       frame,
@@ -671,6 +761,7 @@ export class FumeChart {
       legendBar,
       this.options.formatPrice,
       this.theme,
+      this.indicators.legend(legendIndex, bars, this.options.formatPrice),
     );
   }
 
@@ -694,6 +785,8 @@ export class FumeChart {
     // New dataset: an unfinished drawing or a drag in progress refers to the old picture.
     this.drawings.cancelInteraction();
     this.series = toMutableSeries(indexSeries(bars, this.options.timeScale));
+    // Indicator configuration stays; values from the previous series are discarded.
+    this.indicators.resetData();
     this.priceAxisWidth = this.measurePriceAxisWidth();
     this.lastFrame = null;
     this.olderData = 'idle';
@@ -718,11 +811,13 @@ export class FumeChart {
     const frame = this.lastFrame;
     if (!handler || !frame) return;
     const { layout } = frame;
+    // The corner of the whole pane area (just above the time axis), below any indicator panes.
+    const area = layout.paneArea;
     const state: FollowingLatestState = {
       following: this.isFollowingLatest(),
       plotCorner: {
-        right: layout.width - (layout.plot.x + layout.plot.width),
-        bottom: layout.height - (layout.plot.y + layout.plot.height),
+        right: layout.width - (area.x + area.width),
+        bottom: layout.height - (area.y + area.height),
       },
     };
     const key = JSON.stringify(state);
@@ -844,8 +939,10 @@ export class FumeChart {
       }
     }
     let next = this.drag;
-    if (inPlot) {
-      const manualRange = this.priceScale.mode === 'manual' ? this.priceScale.range : null;
+    if (paneAt(frame, e.offsetX, e.offsetY) >= 0) {
+      // Any pane pans time; only the main pane also moves a MANUAL price window.
+      const manualRange =
+        inPlot && this.priceScale.mode === 'manual' ? this.priceScale.range : null;
       next = beginDrag(this.drag, pointer, this.view, manualRange);
     } else if (isInsidePriceAxis(frame, e.offsetX, e.offsetY) && frame.priceScale) {
       next = beginPriceDrag(
@@ -983,8 +1080,8 @@ export class FumeChart {
       return;
     }
 
-    if (!isInsidePlot(frame, e.offsetX, e.offsetY)) return;
-    // Plot: horizontal zoom / pan only; the price-scale mode is untouched.
+    if (paneAt(frame, e.offsetX, e.offsetY) < 0) return;
+    // Any pane: horizontal zoom / pan only; the price-scale mode is untouched.
     const action = wheelAction(input, plotWidth);
     if (!action) return;
     e.preventDefault();
@@ -1046,7 +1143,7 @@ export class FumeChart {
   }
 
   private cursorAt(frame: Frame, x: number, y: number): string {
-    if (isInsidePlot(frame, x, y)) return 'crosshair';
+    if (paneAt(frame, x, y) >= 0) return 'crosshair';
     if (isInsidePriceAxis(frame, x, y)) return 'ns-resize';
     return 'default';
   }
@@ -1065,4 +1162,27 @@ export class FumeChart {
       this.render();
     });
   }
+}
+
+/** Pane scale used when the engine has no indicator for a pane (never expected; keeps types total). */
+const NO_PANE_SCALE: PaneScaleSpec = {
+  kind: 'auto',
+  includeZero: true,
+  range: null,
+  guides: [],
+  format: (value) => String(value),
+};
+
+/** Position of the bar starting exactly at `time` (bars ascending by start), or -1. */
+function barIndexAtTime(bars: readonly Bar[], time: UnixMs): number {
+  let lo = 0;
+  let hi = bars.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const start = bars[mid]!.start;
+    if (start === time) return mid;
+    if (start < time) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return -1;
 }

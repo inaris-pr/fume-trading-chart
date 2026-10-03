@@ -1,0 +1,13 @@
+{
+  "name": "@fume/indicators",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Fume's pure indicator definitions, schema and incremental calculations. No DOM, no Canvas, no framework, no provider code.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

@@ -14,18 +14,20 @@ export interface PriceRangeOptions {
 }
 
 /**
- * Visible price range from bars[from..to) (half-open), padded. Degenerate spans (all prices equal
- * or nearly so) are widened to a minimum span so the scale never divides by ~0.
- * Returns null when the range contains no bars.
+ * Visible price range from bars[from..to) (half-open), padded. `include` (e.g. the visible values
+ * of price-overlay indicators) widens it before padding. Degenerate spans (all prices equal or
+ * nearly so) are widened to a minimum span so the scale never divides by ~0.
+ * Returns null when there is nothing to fit.
  */
 export function computePriceRange(
   bars: readonly Bar[],
   from: number,
   to: number,
   options: PriceRangeOptions,
+  include: PriceRange | null = null,
 ): PriceRange | null {
-  let low = Number.POSITIVE_INFINITY;
-  let high = Number.NEGATIVE_INFINITY;
+  let low = include ? include.min : Number.POSITIVE_INFINITY;
+  let high = include ? include.max : Number.NEGATIVE_INFINITY;
   for (let i = Math.max(0, from); i < Math.min(to, bars.length); i++) {
     const bar = bars[i]!;
     if (bar.low < low) low = bar.low;

@@ -53,7 +53,11 @@ describe('FumeChartView', () => {
       redoDrawing: true,
       getDrawingHistory: true,
       handleKeyDown: true,
+      addIndicator: true,
+      updateIndicator: true,
+      removeIndicator: true,
+      getIndicators: true,
     };
-    expect(Object.keys(members)).toHaveLength(16);
+    expect(Object.keys(members)).toHaveLength(20);
   });
 });

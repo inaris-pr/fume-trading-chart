@@ -1,11 +1,11 @@
 # Embedding Fume (React component, headless session + DataFeed)
 
-Status: **Stage 8 "drawing UX"** (merged, `7593b0c`): drawing editing commands on top of the
-Stage 7 drawings, the Stage 6 React embedding and the Stage 5 headless session + DataFeed
+Status: **Stage 9 "indicator foundation"** (2026-10-01, uncommitted): indicators on top of the
+Stage 7–8 drawings, the Stage 6 React embedding and the Stage 5 headless session + DataFeed
 extraction. A React application embeds a Fume chart with `<FumeChartView />` (`@fume/react`); any other host drives the framework-free packages directly. The standalone app
 (`apps/web`) consumes both only through their public entry points, exactly as another application
-would. Drawings: [drawings.md](drawings.md). Not yet: indicators, layouts, packaging (compiled
-builds), cross-origin backend auth.
+would. Drawings: [drawings.md](drawings.md). Indicators: [indicators.md](indicators.md). Not yet:
+layouts, packaging (compiled builds), cross-origin backend auth.
 
 ## Packages
 
@@ -73,6 +73,8 @@ re-renders only for its optional chrome.
 | `onDrawingToolChange`      | no       |            | Active tool changed (e.g. back to `cursor` after a drawing is finished).                     |
 | `onDrawingSelectionChange` | no       |            | Selected drawing id (null: none).                                                            |
 | `onDrawingHistoryChange`   | no       |            | `{ canUndo, canRedo }` changed (enable undo/redo buttons).                                   |
+| `indicators`               | no       |            | Indicator configuration (host-owned); applied when the array changes; kept across switches.  |
+| `onIndicatorsChange`       | no       |            | `(indicators, change)`: an add / update / remove through the handle changed them.            |
 
 Changing `symbol`/`assetClass` selects the new instrument (cached resolves are reused); changing
 only `timeframe` switches the timeframe on the same subscription; a re-render with the same values
@@ -109,7 +111,14 @@ view.current?.duplicateDrawing(); // the selected one; returns the new id
 view.current?.deleteDrawing(); // the selected one; false when locked
 view.current?.undoDrawing(); // and redoDrawing(), getDrawingHistory()
 window.addEventListener('keydown', (e) => view.current?.handleKeyDown(e)); // page-level shortcuts
+view.current?.addIndicator('rsi', { params: { period: 9 } }); // returns the id
+view.current?.updateIndicator(id, { visible: false });
+view.current?.removeIndicator(id);
+view.current?.getIndicators();
 ```
+
+Indicator calculation, panes and scaling live in the chart engine ([indicators.md](indicators.md));
+the component only passes configuration and events through.
 
 Edits through the handle are user actions: each is one undo step and is reported through
 `onDrawingsChange`. The undo history lives in the engine, not in React.
